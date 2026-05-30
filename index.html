@@ -90,8 +90,11 @@
       #startBtn:hover { transform: translateY(-1px); }
       #startBtn:active { transform: translateY(2px); box-shadow: 0 1px 0 #b88a00; }
       .credits {
-        position: absolute; bottom: 10px; left: 12px; font-size: 10px; opacity: 0.6;
+        position: absolute; bottom: 10px; left: 12px; font-size: 11px;
+        opacity: 0.55; color: #cdd; z-index: 11;
       }
+      .credits a { color: inherit; text-decoration: none; border-bottom: 1px solid currentColor; }
+      .credits a:hover { opacity: 1; color: var(--gold); }
     </style>
   </head>
   <body>
@@ -133,6 +136,12 @@
         </div>
 
         <button id="startBtn">COMBATTRE !</button>
+      </div>
+
+      <div class="credits">
+        <a href="https://github.com/sailro/BudGame2026" target="_blank" rel="noopener noreferrer">
+          github.com/sailro/BudGame2026
+        </a>
       </div>
     </div>
 
