@@ -11,3 +11,6 @@ Thumbs.db
 .vscode/
 __pycache__/
 *.pyc
+
+# Source photo - kept locally for the face extraction script but not committed
+photos/roaster.jpg
