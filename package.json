@@ -1,0 +1,18 @@
+{
+  "name": "budgame2026",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^7.0.0",
+    "@babylonjs/gui": "^7.0.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

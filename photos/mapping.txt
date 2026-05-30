@@ -1,0 +1,4 @@
+nico => waluigi
+wario => seb
+mario => pat
+luigi => bud
