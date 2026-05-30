@@ -14,6 +14,19 @@ import { HUD } from './ui.js';
 import { InputSystem } from './input.js';
 import { Game } from './game.js';
 import { buildStage } from './stage.js';
+import { CHARACTERS, CHARACTER_IDS } from './characterData.js';
+
+// Warm the browser HTTP cache for every face + head texture as soon as the
+// page loads, so when the player clicks FIGHT the textures are already there
+// (no in-game stutter for first-time visitors on slow networks).
+for (const id of CHARACTER_IDS) {
+  const c = CHARACTERS[id];
+  for (const url of [c.facePath, c.headPath]) {
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = url;
+  }
+}
 
 const canvas = document.getElementById('renderCanvas');
 const engine = new Engine(canvas, true, {

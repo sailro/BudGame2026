@@ -35,8 +35,9 @@ labels_in_order = ['pat', 'lady1', 'lady2', 'seb', 'bud', 'nico']
 wanted = {'pat', 'seb', 'bud', 'nico'}
 
 PAD = 0.20
-FACE_SIZE = 512
+FACE_SIZE = 256              # menu portrait size (displayed at 84px in CSS)
 HEAD_W, HEAD_H = 1024, 512   # 2:1 for spherical UV mapping
+HEAD_JPEG_Q = 85             # JPEG quality for head textures
 SKIN_RGB = (243, 200, 154)
 
 top_pad_override = {'nico': 0.10}
@@ -88,6 +89,25 @@ def make_head_texture(face_rgba: Image.Image) -> Image.Image:
     return canvas
 
 
+def save_face_png(img: Image.Image, label: str):
+    """Save the small circular portrait (used in the menu) as an optimized PNG.
+    Quantize to 256 colors so the file is much smaller (~30 KB instead of 200+ KB)."""
+    path = os.path.join(FACES_OUT, f'{label}.png')
+    # Quantize RGB to 255 colors and keep alpha as a separate channel
+    rgb = img.convert('RGB').quantize(colors=255, dither=Image.Dither.FLOYDSTEINBERG)
+    rgba = rgb.convert('RGBA')
+    rgba.putalpha(img.split()[3])  # preserve original alpha
+    rgba.save(path, 'PNG', optimize=True)
+
+
+def save_head_jpg(img: Image.Image, label: str):
+    """Save the spherical wrap as JPEG (no alpha needed) at ~85 quality.
+    Cuts ~200 KB PNG down to ~25-40 KB JPEG."""
+    path = os.path.join(HEADS_OUT, f'{label}.jpg')
+    img.convert('RGB').save(path, 'JPEG', quality=HEAD_JPEG_Q, optimize=True,
+                            progressive=True)
+
+
 def build_from_override(label: str, src_path: str):
     """Build the face + head outputs for a single character from a dedicated
     photo file (one face per image, face mostly fills the frame). The image
@@ -104,9 +124,9 @@ def build_from_override(label: str, src_path: str):
     sq.paste(pil, ((side - pil.size[0]) // 2, (side - pil.size[1]) // 2))
     sq = sq.resize((FACE_SIZE, FACE_SIZE), Image.LANCZOS)
     sq_alpha = circular_alpha(sq)
-    sq_alpha.save(os.path.join(FACES_OUT, f'{label}.png'), 'PNG')
+    save_face_png(sq_alpha, label)
     head_tex = make_head_texture(sq_alpha)
-    head_tex.save(os.path.join(HEADS_OUT, f'{label}.png'), 'PNG')
+    save_head_jpg(head_tex, label)
     print(f"Saved face + head for {label} (from override: {src_path})")
 
 
@@ -145,9 +165,9 @@ for i, (x, y, w, h) in enumerate(faces):
     sq = sq.resize((FACE_SIZE, FACE_SIZE), Image.LANCZOS)
     sq_alpha = circular_alpha(sq)
 
-    sq_alpha.save(os.path.join(FACES_OUT, f'{label}.png'), 'PNG')
+    save_face_png(sq_alpha, label)
     head_tex = make_head_texture(sq_alpha)
-    head_tex.save(os.path.join(HEADS_OUT, f'{label}.png'), 'PNG')
+    save_head_jpg(head_tex, label)
     print(f"Saved face + head for {label}")
 
 
