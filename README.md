@@ -2,6 +2,8 @@
 
 3D parody fighting game built with [BabylonJS](https://www.babylonjs.com/) and Vite.
 
+**▶️ Play it now: https://sailro.github.io/BudGame2026/**
+
 Four fighters with caricatured special moves:
 
 | Fighter | Special |
