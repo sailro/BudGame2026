@@ -75,4 +75,15 @@ export class InputSystem {
     const codes = this.getMap(side)[action];
     return codes.some(c => this.pressed.has(c));
   }
+
+  /**
+   * Online play: the local human owns a single fighter, so BOTH key maps are
+   * accepted. Whichever half of the keyboard they are used to works.
+   */
+  isHeldAny(action) {
+    return this.isHeld('p1', action) || this.isHeld('p2', action);
+  }
+  isPressedAny(action) {
+    return this.isPressed('p1', action) || this.isPressed('p2', action);
+  }
 }

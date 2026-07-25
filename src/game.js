@@ -12,6 +12,7 @@ import { Character } from './character.js';
 import { Projectile } from './projectile.js';
 import { isActive } from './attacks.js';
 import { CHARACTERS, CHARACTER_IDS } from './characterData.js';
+import { attackDefFromIndex, EVT_HIT, EVT_BLOCK } from './net/protocol.js';
 
 const ROUND_SECONDS = 120;
 
@@ -19,6 +20,7 @@ export class Game {
   constructor({ scene, hud, input, camera }) {
     this.scene = scene;
     this.hud = hud;
+    this.baseInput = input;
     this.input = input;
     this.camera = camera;
     this.state = 'menu';
@@ -33,6 +35,10 @@ export class Game {
     this._hitFreeze = 0;
     this._cameraShake = 0;
 
+    // Netplay session (null = local couch play). See src/net/session.js.
+    this.net = null;
+    this._netProjectiles = new Map();
+
     // F1 toggles debug
     input.onAnyKey((code) => {
       if (code === 'F1') {
@@ -44,8 +50,11 @@ export class Game {
 
   setupMenu() {
     this.hud.buildPortraits(CHARACTER_IDS.map(id => CHARACTERS[id]), (side, id) => {
+      // Online: you may only pick your own fighter.
+      if (this.net && side !== this.net.localSide) return;
       if (side === 'p1') { this.p1Choice = id; this.hud.setActivePortrait('p1', id); }
       else { this.p2Choice = id; this.hud.setActivePortrait('p2', id); }
+      if (this.net) this.net.sendSelect(side, id);
     });
     this.hud.setActivePortrait('p1', this.p1Choice);
     this.hud.setActivePortrait('p2', this.p2Choice);
@@ -54,18 +63,28 @@ export class Game {
   }
 
   startMatch() {
+    if (this.net && this.net.role === 'guest') return; // only the host starts the round
+    this._beginMatch(this.p1Choice, this.p2Choice);
+    if (this.net) this.net.sendStart(this.p1Choice, this.p2Choice);
+  }
+
+  _beginMatch(p1Id, p2Id) {
+    this.p1Choice = p1Id;
+    this.p2Choice = p2Id;
+
     // Tear down previous players
     for (const p of this.players) p.dispose();
     this.players = [];
     for (const pr of this.projectiles) pr.dispose();
     this.projectiles = [];
+    this._netProjectiles.clear();
 
     const p1 = new Character({
-      scene: this.scene, config: CHARACTERS[this.p1Choice],
+      scene: this.scene, config: CHARACTERS[p1Id],
       side: -1, playerSide: 'p1',
     });
     const p2 = new Character({
-      scene: this.scene, config: CHARACTERS[this.p2Choice],
+      scene: this.scene, config: CHARACTERS[p2Id],
       side: +1, playerSide: 'p2',
     });
     this.players = [p1, p2];
@@ -79,6 +98,9 @@ export class Game {
     this.timer = ROUND_SECONDS;
     this.state = 'countdown';
     this._countdownT = 0;
+    this._hitFreeze = 0;
+    this._cameraShake = 0;
+    if (this.net) this.net.remoteInput.reset();
     this.hud.showMessage('PRÊT ?', 900);
   }
 
@@ -86,11 +108,34 @@ export class Game {
     this.state = 'menu';
     this.hud.showMenu(true);
     this.hud.clearMessage();
+    if (this.net) {
+      this.net.sendMenu();
+      this.net.remoteInput.reset();
+    }
+  }
+
+  /** Show a centered message and mirror it to the remote player (host only). */
+  _msg(text, duration) {
+    this.hud.showMessage(text, duration);
+    if (this.net) this.net.sendMsg(text, duration);
+  }
+  _clearMsg() {
+    this.hud.clearMessage();
+    if (this.net) this.net.sendMsg(null, 0);
   }
 
   // ---------- Per-frame ----------
 
+  /** Local play and the netplay host run the fixed-step simulation. */
+  isSimulating() { return !this.net || this.net.role === 'host'; }
+
   update(dt) {
+    if (this.net && this.net.role === 'guest') { this._guestStep(dt); return; }
+    this._step(dt);
+    if (this.net) this.net.afterHostTick();
+  }
+
+  _step(dt) {
     // Camera shake decay
     if (this._cameraShake > 0) this._cameraShake = Math.max(0, this._cameraShake - dt * 6);
 
@@ -104,10 +149,10 @@ export class Game {
       if (this._countdownT < 1.0) {
         // "PRÊT ?" already shown
       } else if (this._countdownT < 1.05) {
-        this.hud.showMessage('COMBATTEZ !', 900);
+        this._msg('COMBATTEZ !', 900);
       } else if (this._countdownT >= 1.8) {
         this.state = 'fight';
-        this.hud.clearMessage();
+        this._clearMsg();
       }
       // While countdown, run minimal updates to position players (no input)
       for (const p of this.players) p.update(dt, this._otherOf(p), 0);
@@ -246,11 +291,12 @@ export class Game {
       if (p1.hp === p2.hp) msg = 'TEMPS ÉCOULÉ !\nÉGALITÉ !';
       else msg = `TEMPS ÉCOULÉ !\n${(p1.hp > p2.hp ? p1 : p2).config.name} GAGNE !`;
     }
-    this.hud.showMessage(msg, 3300);
+    this._msg(msg, 3300);
     this._cameraShake = 1.0;
   }
 
   _onHit(attacker, target, kind) {
+    if (this.net) this.net.noteEvent(kind);
     if (kind === 'hit') {
       this._hitFreeze = 0.06;
       this._cameraShake = 0.7;
@@ -263,6 +309,142 @@ export class Game {
 
   _otherOf(p) {
     return this.players[0] === p ? this.players[1] : this.players[0];
+  }
+
+  // ---------- Netplay ----------
+
+  /** Take over input + simulation ownership from a connected NetSession. */
+  attachNet(session) {
+    this.net = session;
+    this.input = session.router;
+    this.hud.setOnlineRole(session.localSide);
+  }
+
+  /** Go back to plain couch play. */
+  detachNet() {
+    if (this.net) this.net.dispose();
+    this.net = null;
+    this.input = this.baseInput;
+    this.hud.setOnlineRole(null);
+    this.hud.setNetStatus('');
+  }
+
+  netOnRemoteSelect(side, id) {
+    if (side === 'p1') this.p1Choice = id; else this.p2Choice = id;
+    this.hud.setActivePortrait(side, id);
+  }
+
+  netOnStart(p1Id, p2Id) { this._beginMatch(p1Id, p2Id); }
+
+  netOnMenu() {
+    this.state = 'menu';
+    this.hud.showMenu(true);
+    this.hud.clearMessage();
+    // Stop replaying the last frame of the finished round.
+    if (this.net) this.net.latestSnapshot = null;
+  }
+
+  /**
+   * Guest frame: no simulation at all. We ship our keystrokes to the host and
+   * replay the authoritative snapshot it sends back, smoothing positions so
+   * network jitter does not show up as stutter.
+   */
+  _guestStep(dt) {
+    if (this._cameraShake > 0) this._cameraShake = Math.max(0, this._cameraShake - dt * 6);
+    this.net.guestFrame(dt);
+
+    const snap = this.net.latestSnapshot;
+    if (snap && this.players.length === 2) {
+      this._applySnapshot(snap, dt, this.net.consumeNewSnapshot());
+      this._updateCamera(dt);
+    }
+    this.input.endFrame();
+  }
+
+  _applySnapshot(snap, dt, isFresh) {
+    this.state = snap.gameState;
+    this.timer = snap.timer;
+    this.hud.setTimer(snap.timer);
+
+    if (isFresh && snap.events) {
+      if (snap.events & EVT_HIT) this._cameraShake = 0.7;
+      else if (snap.events & EVT_BLOCK) this._cameraShake = 0.25;
+    }
+
+    const smooth = Math.min(1, dt * 30);
+    for (let i = 0; i < 2; i++) {
+      const p = this.players[i];
+      const s = snap.players[i];
+
+      // Lerp small corrections, hard-snap teleports (round start, big knockback).
+      const dx = s.x - p.root.position.x;
+      const dy = s.y - p.root.position.y;
+      if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) {
+        p.root.position.x = s.x;
+        p.root.position.y = s.y;
+      } else {
+        p.root.position.x += dx * smooth;
+        p.root.position.y += dy * smooth;
+      }
+
+      if (p.facing !== s.facing) { p.facing = s.facing; p._applyFacing(); }
+      p.state = s.state;
+      p.frame = s.frame;
+      p.hp = s.hp;
+      p.hitstun = s.hitstun;
+      p.grounded = s.grounded;
+      p.isBlocking = s.blocking;
+
+      if (s.attack) {
+        const def = attackDefFromIndex(s.attack.index);
+        if (!p.currentAttack || p.currentAttack.def !== def) {
+          p.currentAttack = { def, frame: s.attack.frame, state: s.attack.phase, alreadyHit: new Set(), done: false };
+        } else {
+          p.currentAttack.frame = s.attack.frame;
+          p.currentAttack.state = s.attack.phase;
+        }
+      } else {
+        p.currentAttack = null;
+      }
+
+      p.updateAnimation();
+    }
+
+    this.hud.setHP(this.players[0].hp / this.players[0].maxHp,
+                   this.players[1].hp / this.players[1].maxHp);
+
+    this._syncNetProjectiles(snap.projectiles, dt);
+  }
+
+  /** Mirror the host's projectile list, creating/removing meshes by net id. */
+  _syncNetProjectiles(list, dt) {
+    const smooth = Math.min(1, dt * 30);
+    const seen = new Set();
+    for (const s of list) {
+      seen.add(s.id);
+      let pr = this._netProjectiles.get(s.id);
+      if (!pr) {
+        pr = new Projectile(this.scene, {
+          position: new Vector3(s.x, s.y, 0),
+          velocity: new Vector3(0, 0, 0),
+          owner: null, attackDef: null,
+        });
+        pr.netId = s.id;
+        this._netProjectiles.set(s.id, pr);
+        this.projectiles.push(pr);
+      }
+      pr.position.x += (s.x - pr.position.x) * smooth;
+      pr.position.y += (s.y - pr.position.y) * smooth;
+      pr.mesh.position.copyFrom(pr.position);
+      pr.mesh.rotation.x += dt * 8;
+      pr.mesh.rotation.z += dt * 6;
+    }
+    if (this._netProjectiles.size === seen.size) return;
+    let removed = false;
+    for (const [id, pr] of this._netProjectiles) {
+      if (!seen.has(id)) { pr.dispose(); this._netProjectiles.delete(id); removed = true; }
+    }
+    if (removed) this.projectiles = this.projectiles.filter(p => this._netProjectiles.has(p.netId));
   }
 
   /**

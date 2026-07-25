@@ -82,6 +82,7 @@
       }
       .controls { font-size: 12px; opacity: 0.9; color: #cdd; text-align: center; line-height: 1.7; }
       .controls b { color: var(--gold); }
+      .menu-actions { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: center; }
       #startBtn {
         background: var(--gold); color: #1a1a1a; border: 0; padding: 16px 36px;
         font-size: 20px; font-weight: 900; letter-spacing: 2px; border-radius: 4px;
@@ -89,6 +90,68 @@
       }
       #startBtn:hover { transform: translateY(-1px); }
       #startBtn:active { transform: translateY(2px); box-shadow: 0 1px 0 #b88a00; }
+      #startBtn:disabled { background: #555; color: #bbb; box-shadow: 0 4px 0 #333; cursor: default; transform: none; }
+      #onlineBtn {
+        background: transparent; color: var(--gold); border: 3px solid var(--gold);
+        padding: 13px 26px; font-size: 16px; font-weight: 900; letter-spacing: 2px;
+        border-radius: 4px; cursor: pointer; font-family: inherit;
+      }
+      #onlineBtn:hover { background: rgba(255, 214, 10, 0.12); }
+
+      /* ---------- Online ---------- */
+      #netBanner {
+        font-size: 13px; letter-spacing: 1px; color: #90e0ef; text-align: center;
+        border: 2px solid rgba(144, 224, 239, 0.5); border-radius: 4px; padding: 8px 16px;
+        background: rgba(0, 53, 102, 0.35);
+      }
+      .portraits.locked { opacity: 0.45; }
+      .portraits.locked .portrait { cursor: not-allowed; }
+      .portraits.locked .portrait:hover { transform: none; }
+      #netBadge {
+        position: absolute; bottom: 10px; right: 12px; font-size: 11px;
+        color: #90e0ef; opacity: 0.85; letter-spacing: 1px;
+      }
+      #netPanel {
+        position: absolute; inset: 0; z-index: 20; display: flex;
+        align-items: center; justify-content: center; padding: 20px;
+        background: rgba(0, 0, 0, 0.88); pointer-events: auto; overflow: auto;
+      }
+      #netPanel[hidden] { display: none; }
+      .net-card {
+        width: min(680px, 100%); background: #12141c; border: 3px solid var(--gold);
+        border-radius: 8px; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px;
+      }
+      .net-card h2 { margin: 0; color: var(--gold); font-size: 20px; letter-spacing: 2px; }
+      .net-sub { margin: 0; font-size: 12px; color: #9fb; opacity: 0.8; line-height: 1.6; }
+      .net-step { display: flex; flex-direction: column; gap: 10px; }
+      .net-step[hidden] { display: none; }
+      .net-step label { font-size: 12px; color: #cdd; letter-spacing: 1px; }
+      .net-card textarea {
+        width: 100%; background: #0a0c12; color: #9fe; border: 2px solid #333;
+        border-radius: 4px; padding: 8px; font-family: ui-monospace, Consolas, monospace;
+        font-size: 11px; resize: vertical; word-break: break-all;
+      }
+      .net-row { display: flex; gap: 10px; flex-wrap: wrap; }
+      .net-btn {
+        background: var(--gold); color: #1a1a1a; border: 0; padding: 12px 20px;
+        font-size: 14px; font-weight: 900; letter-spacing: 1px; border-radius: 4px;
+        cursor: pointer; font-family: inherit; box-shadow: 0 3px 0 #b88a00;
+      }
+      .net-btn:hover { transform: translateY(-1px); }
+      .net-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #b88a00; }
+      .net-btn:disabled { background: #555; color: #bbb; box-shadow: 0 3px 0 #333; cursor: default; transform: none; }
+      .net-btn.small { padding: 9px 14px; font-size: 12px; }
+      .net-btn.ghost { background: transparent; color: #cdd; border: 2px solid #555; box-shadow: none; }
+      .net-btn.ghost:hover { background: rgba(255, 255, 255, 0.06); }
+      .net-status { font-size: 12px; color: #ffd60a; min-height: 18px; letter-spacing: 1px; line-height: 1.6; }
+      .net-status.error { color: #ff6b6b; }
+      .net-advanced { border: 2px solid #333; border-radius: 4px; padding: 10px 12px; }
+      .net-advanced summary { font-size: 12px; color: #cdd; cursor: pointer; letter-spacing: 1px; }
+      .net-advanced > *:not(summary) { margin-top: 10px; }
+      .net-advanced input {
+        width: 100%; background: #0a0c12; color: #9fe; border: 2px solid #333;
+        border-radius: 4px; padding: 8px; font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+      }
       .credits {
         position: absolute; bottom: 10px; left: 12px; font-size: 11px;
         opacity: 0.55; color: #cdd; z-index: 11;
@@ -112,11 +175,14 @@
           <div class="hp-bar"><div class="hp-fill" id="p2HP"></div></div>
         </div>
         <div id="centerMsg"></div>
+        <div id="netBadge" hidden></div>
       </div>
 
       <div id="menu">
         <h1>BUD GAME 2026</h1>
         <h2>La baston la plus ridicule du canapé</h2>
+
+        <div id="netBanner" hidden></div>
 
         <div class="select-row">
           <div class="select-col p1">
@@ -129,13 +195,83 @@
           </div>
         </div>
 
-        <div class="controls">
+        <div class="controls" id="localControls">
           <div><b>J1 :</b>  A/D se déplacer &middot; W sauter &middot; S bloquer &middot; F poing &middot; G pied &middot; <b>H = SPÉCIAL</b></div>
           <div><b>J2 :</b>  ←/→ se déplacer &middot; ↑ sauter &middot; ↓ bloquer &middot; J poing &middot; K pied &middot; <b>L = SPÉCIAL</b></div>
           <div style="opacity:.7;margin-top:8px">F1 = afficher les hitboxes (debug)</div>
         </div>
 
-        <button id="startBtn">COMBATTRE !</button>
+        <div class="controls" id="onlineControls" hidden>
+          <div>Vous pilotez <b>un seul</b> personnage : les deux jeux de touches marchent.</div>
+          <div>A/D ou ←/→ se déplacer &middot; W ou ↑ sauter &middot; S ou ↓ bloquer</div>
+          <div>F ou J poing &middot; G ou K pied &middot; <b>H ou L = SPÉCIAL</b></div>
+        </div>
+
+        <div class="menu-actions">
+          <button id="startBtn">COMBATTRE !</button>
+          <button id="onlineBtn">JOUER EN LIGNE</button>
+        </div>
+      </div>
+
+      <div id="netPanel" hidden>
+        <div class="net-card">
+          <h2>JOUER EN LIGNE</h2>
+          <p class="net-sub">
+            100 % pair-à-pair : aucun serveur de jeu. Les deux navigateurs se parlent
+            directement, il suffit de s'échanger un code (Discord, SMS, mail…).
+          </p>
+
+          <div class="net-step" id="netHome">
+            <button class="net-btn" id="netHostBtn">CRÉER UNE PARTIE (joueur 1)</button>
+            <button class="net-btn" id="netJoinBtn">REJOINDRE UNE PARTIE (joueur 2)</button>
+            <details class="net-advanced">
+              <summary>Options avancées — relais TURN (si la connexion échoue)</summary>
+              <p class="net-sub">
+                Par défaut le jeu est 100 % pair-à-pair. Si votre réseau bloque la connexion
+                directe (NAT symétrique, pare-feu d'entreprise), collez ici les identifiants
+                d'un relais TURN gratuit (ExpressTURN, Metered…). Stocké dans ce navigateur
+                uniquement. Un seul des deux joueurs a besoin de le configurer.
+              </p>
+              <input id="turnUrl" type="text" placeholder="turn:relay.example.com:443?transport=tcp" />
+              <input id="turnUser" type="text" placeholder="utilisateur" autocomplete="off" />
+              <input id="turnPass" type="password" placeholder="mot de passe" autocomplete="off" />
+              <div class="net-row">
+                <button class="net-btn small" id="turnSave">ENREGISTRER</button>
+                <button class="net-btn small ghost" id="turnClear">EFFACER</button>
+              </div>
+            </details>
+            <button class="net-btn ghost" id="netCloseBtn">RETOUR</button>
+          </div>
+
+          <div class="net-step" id="netHostStep" hidden>
+            <label>1. Envoyez ce lien (ou ce code) à votre adversaire</label>
+            <textarea id="netOffer" readonly rows="3" placeholder="Génération…"></textarea>
+            <div class="net-row">
+              <button class="net-btn small" id="netCopyLink">COPIER LE LIEN</button>
+              <button class="net-btn small" id="netCopyCode">COPIER LE CODE</button>
+            </div>
+            <label>2. Collez ici la réponse qu'il vous renvoie</label>
+            <textarea id="netAnswerIn" rows="3" placeholder="Collez le code de réponse…"></textarea>
+            <div class="net-row">
+              <button class="net-btn" id="netConnectBtn">CONNECTER</button>
+              <button class="net-btn ghost" id="netBackHost">ANNULER</button>
+            </div>
+          </div>
+
+          <div class="net-step" id="netJoinStep" hidden>
+            <label>1. Collez l'invitation reçue (lien ou code)</label>
+            <textarea id="netOfferIn" rows="3" placeholder="Collez le lien ou le code…"></textarea>
+            <button class="net-btn" id="netGenAnswer">GÉNÉRER MA RÉPONSE</button>
+            <div id="netAnswerWrap" hidden>
+              <label>2. Renvoyez ce code de réponse à l'hôte, puis attendez</label>
+              <textarea id="netAnswerOut" readonly rows="3"></textarea>
+              <button class="net-btn small" id="netCopyAnswer">COPIER LA RÉPONSE</button>
+            </div>
+            <button class="net-btn ghost" id="netBackJoin">ANNULER</button>
+          </div>
+
+          <div class="net-status" id="netStatus"></div>
+        </div>
       </div>
 
       <div class="credits">

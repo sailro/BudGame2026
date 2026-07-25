@@ -14,6 +14,40 @@ export class HUD {
     this.startBtn = document.getElementById('startBtn');
     this.p1Portraits = document.getElementById('p1Portraits');
     this.p2Portraits = document.getElementById('p2Portraits');
+    this.netBanner = document.getElementById('netBanner');
+    this.netBadge = document.getElementById('netBadge');
+    this.localControls = document.getElementById('localControls');
+    this.onlineControls = document.getElementById('onlineControls');
+    this.onlineSide = null;
+  }
+
+  /**
+   * Switch the character-select screen between couch play and online play.
+   * @param {'p1'|'p2'|null} localSide  which fighter the local player owns
+   */
+  setOnlineRole(localSide) {
+    this.onlineSide = localSide || null;
+    const online = !!localSide;
+    this.netBanner.hidden = !online;
+    this.netBadge.hidden = !online;
+    this.localControls.hidden = online;
+    this.onlineControls.hidden = !online;
+    if (online) {
+      this.netBanner.textContent = localSide === 'p1'
+        ? 'EN LIGNE — vous êtes JOUEUR 1 (hôte)'
+        : 'EN LIGNE — vous êtes JOUEUR 2';
+      this.startBtn.textContent = localSide === 'p1' ? 'COMBATTRE !' : "EN ATTENTE DE L'HÔTE…";
+      this.startBtn.disabled = localSide !== 'p1';
+    } else {
+      this.startBtn.textContent = 'COMBATTRE !';
+      this.startBtn.disabled = false;
+    }
+    this.p1Portraits.classList.toggle('locked', online && localSide !== 'p1');
+    this.p2Portraits.classList.toggle('locked', online && localSide !== 'p2');
+  }
+
+  setNetStatus(text) {
+    this.netBadge.textContent = text;
   }
 
   showMenu(visible) {

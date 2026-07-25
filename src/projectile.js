@@ -22,6 +22,7 @@ export class Projectile {
     this.hitTargets = new Set();
     this.radius = 0.25;
 
+    this.netId = rockCounter & 0xffff; // stable handle for state replication
     const id = `rock_${rockCounter++}`;
     this.mesh = MeshBuilder.CreateSphere(id, { diameter: this.radius * 2, segments: 10 }, scene);
     const mat = new StandardMaterial(id + '_mat', scene);
