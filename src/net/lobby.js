@@ -8,7 +8,7 @@
 import { NetPeer } from './peer.js';
 import { NetSession } from './session.js';
 import { buildJoinUrl, readJoinTokenFromUrl } from './signal.js';
-import { loadTurnConfig, saveTurnConfig } from './turnConfig.js';
+import { loadTurnConfig, saveTurnConfig, testTurnConfig, normalizeTurnUrls } from './turnConfig.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -69,18 +69,37 @@ export class Lobby {
       $('turnPass').value = turn.credential || '';
     }
     $('turnSave').addEventListener('click', () => {
-      saveTurnConfig({
-        urls: $('turnUrl').value.trim(),
-        username: $('turnUser').value.trim(),
-        credential: $('turnPass').value,
-      });
-      this._status($('turnUrl').value.trim() ? 'Relais TURN enregistré.' : 'Relais TURN effacé.');
+      const cfg = this._readTurnForm();
+      saveTurnConfig(cfg.urls ? cfg : null);
+      if (!cfg.urls) return this._status('Relais TURN effacé — retour au pair-à-pair pur.');
+      this._status('Relais enregistré : ' + normalizeTurnUrls(cfg.urls).join(', '));
+    });
+    $('turnTest').addEventListener('click', async () => {
+      const cfg = this._readTurnForm();
+      if (!cfg.urls) return this._status('Renseignez d\'abord une adresse de relais.', true);
+      const btn = $('turnTest');
+      btn.disabled = true;
+      this._status('Test du relais en cours…');
+      try {
+        const res = await testTurnConfig(cfg);
+        this._status(res.message, !res.ok);
+      } finally {
+        btn.disabled = false;
+      }
     });
     $('turnClear').addEventListener('click', () => {
       $('turnUrl').value = $('turnUser').value = $('turnPass').value = '';
       saveTurnConfig(null);
       this._status('Relais TURN effacé — retour au pair-à-pair pur.');
     });
+  }
+
+  _readTurnForm() {
+    return {
+      urls: $('turnUrl').value.trim(),
+      username: $('turnUser').value.trim(),
+      credential: $('turnPass').value.trim(),
+    };
   }
 
   // ---------- Panel plumbing ----------
@@ -102,6 +121,12 @@ export class Lobby {
   _status(text, isError = false) {
     this.statusEl.textContent = text;
     this.statusEl.classList.toggle('error', isError);
+  }
+
+  /** Prefix a status line with anything the peer wants the user to know. */
+  _withWarnings(text) {
+    const w = this.peer?.warnings || [];
+    return w.length ? w.join(' ') + ' — ' + text : text;
   }
 
   async _copy(text, okMessage) {
@@ -148,7 +173,8 @@ export class Lobby {
       const peer = this._newPeer();
       this._inviteToken = await peer.createInvite();
       $('netOffer').value = buildJoinUrl(this._inviteToken);
-      this._status('Envoyez le lien, puis collez la réponse reçue.');
+      this._status(this._withWarnings('Envoyez le lien, puis collez la réponse reçue.'),
+                   peer.warnings.length > 0);
     } catch (err) {
       this._status('Erreur : ' + err.message, true);
       this._teardownPeer();
@@ -180,7 +206,8 @@ export class Lobby {
       const answer = await peer.acceptInvite($('netOfferIn').value);
       $('netAnswerOut').value = answer;
       $('netAnswerWrap').hidden = false;
-      this._status('Renvoyez cette réponse à l\'hôte et patientez…');
+      this._status(this._withWarnings('Renvoyez cette réponse à l\'hôte et patientez…'),
+                   peer.warnings.length > 0);
     } catch (err) {
       this._status('Erreur : ' + err.message, true);
       this._teardownPeer();

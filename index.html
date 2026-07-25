@@ -232,13 +232,19 @@
                 d'un relais TURN gratuit (ExpressTURN, Metered…). Stocké dans ce navigateur
                 uniquement. Un seul des deux joueurs a besoin de le configurer.
               </p>
-              <input id="turnUrl" type="text" placeholder="turn:relay.example.com:443?transport=tcp" />
+              <input id="turnUrl" type="text" placeholder="free.expressturn.com:3478" />
               <input id="turnUser" type="text" placeholder="utilisateur" autocomplete="off" />
               <input id="turnPass" type="password" placeholder="mot de passe" autocomplete="off" />
               <div class="net-row">
+                <button class="net-btn small" id="turnTest">TESTER</button>
                 <button class="net-btn small" id="turnSave">ENREGISTRER</button>
                 <button class="net-btn small ghost" id="turnClear">EFFACER</button>
               </div>
+              <p class="net-sub">
+                Collez l'adresse telle que fournie par votre relais : le préfixe
+                <code>turn:</code> est ajouté automatiquement, et les variantes UDP et TCP
+                sont essayées toutes les deux.
+              </p>
             </details>
             <button class="net-btn ghost" id="netCloseBtn">RETOUR</button>
           </div>

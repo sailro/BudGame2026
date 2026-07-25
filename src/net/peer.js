@@ -26,6 +26,7 @@ export class NetPeer {
     this.rtt = 0;
     this.candidateTypes = new Set();
     this.usingTurn = false;
+    this.warnings = [];
 
     // Callbacks, assigned by the owner.
     this.onOpen = null;      // ()
@@ -45,10 +46,18 @@ export class NetPeer {
     this.usingTurn = turn.length > 0;
     // iceCandidatePoolSize is deliberately 0: pre-gathering would open TURN
     // allocations we may never use, and buys nothing with non-trickle ICE.
-    const pc = new RTCPeerConnection({
-      iceServers: [...STUN_SERVERS, ...turn],
-      iceCandidatePoolSize: 0,
-    });
+    let pc;
+    try {
+      pc = new RTCPeerConnection({
+        iceServers: [...STUN_SERVERS, ...turn],
+        iceCandidatePoolSize: 0,
+      });
+    } catch (err) {
+      // A malformed relay URL must never take online play down with it.
+      this.usingTurn = false;
+      this.warnings.push('Relais TURN ignoré (URL invalide) — connexion directe uniquement.');
+      pc = new RTCPeerConnection({ iceServers: STUN_SERVERS, iceCandidatePoolSize: 0 });
+    }
     this.pc = pc;
     pc.addEventListener('connectionstatechange', () => {
       const s = pc.connectionState;

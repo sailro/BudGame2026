@@ -65,9 +65,15 @@ LAN/VPN.
 The only real cure is a **TURN relay**, which is by definition a third-party
 server — so it is strictly opt-in and never bundled. Under
 *Options avancées* you can paste credentials for a free relay (ExpressTURN,
-Metered Open Relay…); they are stored in your browser's `localStorage` only,
-and **only one of the two players needs to configure one**. Note that a relay
-reached over TCP/TLS will add noticeable input lag compared to UDP.
+Metered Open Relay…) and hit **TESTER** to verify them before playing; they are
+stored in your browser's `localStorage` only, and **only one of the two players
+needs to configure one**.
+
+Paste the address exactly as your provider gives it (e.g.
+`free.expressturn.com:3478`): the `turn:` scheme is added automatically and both
+the UDP and TCP variants are registered, TCP being what gets through firewalls
+that drop UDP. Note that a relay reached over TCP/TLS adds noticeable input lag
+compared to UDP.
 
 For a self-hosted build you may instead bake in a default relay at build time:
 

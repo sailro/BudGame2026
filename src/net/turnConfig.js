@@ -49,14 +49,99 @@ export function saveTurnConfig(cfg) {
   }
 }
 
-/** iceServers entries to append to the STUN list (empty when not configured). */
-export function turnIceServers() {
-  const cfg = loadTurnConfig();
-  if (!cfg) return [];
-  const entry = { urls: cfg.urls.split(',').map(s => s.trim()).filter(Boolean) };
+/**
+ * Turn whatever the user pasted into URLs the browser will actually accept.
+ *
+ * Provider dashboards (ExpressTURN in particular) hand out a bare
+ * "host:port" — feeding that to RTCPeerConnection throws
+ * `SyntaxError: '…' is not a valid stun or turn URL`, which would break the
+ * whole connection. So: add the missing `turn:` scheme, and when no transport
+ * is pinned, register both UDP and TCP variants (TCP is what gets through
+ * firewalls that drop UDP).
+ */
+export function normalizeTurnUrls(raw) {
+  const out = [];
+  for (const part of String(raw || '').split(/[,\s]+/)) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const url = /^(turns?|stun):/i.test(trimmed) ? trimmed : 'turn:' + trimmed;
+    if (/^turn:/i.test(url) && !/[?&]transport=/i.test(url)) {
+      out.push(url + '?transport=udp', url + '?transport=tcp');
+    } else {
+      out.push(url);
+    }
+  }
+  return [...new Set(out)];
+}
+
+/** iceServers entries for a given config (empty when not configured). */
+export function buildIceServers(cfg) {
+  if (!cfg || !cfg.urls) return [];
+  const urls = normalizeTurnUrls(cfg.urls);
+  if (!urls.length) return [];
+  const entry = { urls };
   if (cfg.username) entry.username = cfg.username;
   if (cfg.credential) entry.credential = cfg.credential;
-  return entry.urls.length ? [entry] : [];
+  return [entry];
+}
+
+/** iceServers entries to append to the STUN list (empty when not configured). */
+export function turnIceServers() {
+  return buildIceServers(loadTurnConfig());
+}
+
+function describeTurnErrors(errors) {
+  const codes = new Set(errors.map(e => e.code));
+  if (codes.has(401)) return 'Identifiants refusés par le relais (401). Vérifiez utilisateur / mot de passe.';
+  if (codes.has(403)) return 'Relais accessible mais accès refusé (403) : quota dépassé ?';
+  if (codes.has(701)) return 'Relais injoignable (DNS ou UDP/TCP sortant bloqué vers ce port).';
+  if (errors.length) return `Le relais n'a pas répondu (code ${[...codes].join(', ')}).`;
+  return "Aucun candidat relais obtenu : le relais n'a pas répondu.";
+}
+
+/**
+ * Actually exercise a TURN config: allocate through it and report back.
+ * `iceTransportPolicy: 'relay'` discards host/srflx candidates, so a candidate
+ * appearing at all proves the relay accepted us.
+ */
+export function testTurnConfig(cfg, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    const servers = buildIceServers(cfg);
+    if (!servers.length) return resolve({ ok: false, message: 'Aucune URL de relais renseignée.' });
+
+    let pc;
+    try {
+      pc = new RTCPeerConnection({ iceServers: servers, iceTransportPolicy: 'relay' });
+    } catch (err) {
+      return resolve({ ok: false, message: 'URL de relais invalide : ' + err.message });
+    }
+
+    const protocols = new Set();
+    const errors = [];
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { pc.close(); } catch { /* already closed */ }
+      resolve(protocols.size
+        ? { ok: true, message: `Relais OK (${[...protocols].join(' + ')}). Il sera utilisé en dernier recours.` }
+        : { ok: false, message: describeTurnErrors(errors) });
+    };
+    const timer = setTimeout(finish, timeoutMs);
+
+    pc.addEventListener('icecandidate', (e) => {
+      if (!e.candidate) return finish();
+      if (e.candidate.type === 'relay') {
+        protocols.add((e.candidate.protocol || 'udp').toUpperCase());
+        finish();
+      }
+    });
+    pc.addEventListener('icecandidateerror', (e) => errors.push({ code: e.errorCode, text: e.errorText }));
+
+    pc.createDataChannel('probe');
+    pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => finish());
+  });
 }
 
 /**
