@@ -82,7 +82,13 @@ export class Lobby {
     });
     $('netCloseBtn').addEventListener('click', () => this.close());
     $('netHostBtn').addEventListener('click', () => this._hostRoom());
-    $('netJoinBtn').addEventListener('click', () => { this.open('roomJoin'); this._status(''); });
+    $('netJoinBtn').addEventListener('click', () => {
+      this._setJoinBusy(false);
+      $('netRoomCodeIn').value = '';
+      $('netRoomJoinTurn').textContent = '';
+      this.open('roomJoin');
+      this._status('');
+    });
     $('netManualHost').addEventListener('click', () => this._startHost());
     $('netManualJoin').addEventListener('click', () => { this.open('join'); this._status(''); });
     $('netCancelRoomHost').addEventListener('click', () => this._cancel());
@@ -91,8 +97,7 @@ export class Lobby {
       const code = normalizeRoomCode($('netRoomCodeIn').value);
       if (!code) return this._status('Code invalide (8 caractères attendus).', true);
       this._joinRoom(code);
-    });
-    $('netCopyRoomLink').addEventListener('click', () => this._copy($('netRoomLink').value, 'Lien copié !'));
+    });    $('netCopyRoomLink').addEventListener('click', () => this._copy($('netRoomLink').value, 'Lien copié !'));
     $('netCopyRoomCode').addEventListener('click', () => this._copy($('netRoomCode').textContent, 'Code copié !'));
     $('netBackHost').addEventListener('click', () => this._cancel());
     $('netBackJoin').addEventListener('click', () => this._cancel());
@@ -195,6 +200,7 @@ export class Lobby {
   _cancel() {
     this._teardownPeer();
     this._teardownRendezvous();
+    this._setJoinBusy(false);
     this._inviteToken = null;
     this._showStep('home');
     this._status('');
@@ -345,6 +351,9 @@ export class Lobby {
     this._busy = true;
     this._showStep('roomJoin');
     $('netRoomCodeIn').value = code;
+    // Joining starts on its own when arriving from a link, so the form must
+    // not keep looking like it is waiting to be submitted.
+    this._setJoinBusy(true);
     this._status('Connexion aux relais de rendez-vous…');
 
     try {
@@ -375,9 +384,21 @@ export class Lobby {
       this._status('Erreur : ' + err.message, true);
       this._teardownPeer();
       this._teardownRendezvous();
+      this._setJoinBusy(false);      // let them fix the code and try again
     } finally {
       this._busy = false;
     }
+  }
+
+  /** Lock or release the join form while a connection attempt is under way. */
+  _setJoinBusy(busy) {
+    const btn = $('netRoomJoinGo');
+    btn.disabled = busy;
+    btn.textContent = busy ? 'CONNEXION…' : 'REJOINDRE';
+    $('netRoomCodeIn').readOnly = busy;
+    $('netRoomJoinLabel').textContent = busy
+      ? 'Connexion à la partie…'
+      : 'Entrez le code du salon reçu';
   }
 
   _newPeer() {
