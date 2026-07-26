@@ -157,6 +157,8 @@
         border-radius: 4px; padding: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 13px;
       }
       .room-code { color: var(--gold); font-size: 16px; letter-spacing: 3px; }
+      .turn-ok { color: #7ae582 !important; opacity: 1 !important; }
+      .turn-warn { color: #ffb703 !important; opacity: 1 !important; }
       .credits {
         position: absolute; bottom: 10px; left: 12px; font-size: 11px;
         opacity: 0.55; color: #cdd; z-index: 11;
@@ -279,6 +281,7 @@
               Code du salon : <b id="netRoomCode" class="room-code"></b><br />
               Laissez cette page ouverte : la partie démarre dès que votre adversaire arrive.
             </p>
+            <p class="net-sub" id="netRoomTurn"></p>
             <button class="net-btn ghost" id="netCancelRoomHost">ANNULER</button>
           </div>
 
@@ -286,6 +289,7 @@
             <label>Entrez le code du salon reçu</label>
             <input id="netRoomCodeIn" type="text" placeholder="ABCD-2345" autocomplete="off" />
             <button class="net-btn" id="netRoomJoinGo">REJOINDRE</button>
+            <p class="net-sub" id="netRoomJoinTurn"></p>
             <button class="net-btn ghost" id="netCancelRoomJoin">ANNULER</button>
           </div>
 

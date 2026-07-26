@@ -11,8 +11,8 @@
 
 import { NetPeer } from './peer.js';
 import { NetSession } from './session.js';
-import { buildJoinUrl, readJoinTokenFromUrl } from './signal.js';
-import { loadTurnConfig, saveTurnConfig, testTurnConfig, normalizeTurnUrls } from './turnConfig.js';
+import { buildJoinUrl, readJoinTokenFromUrl, packPayload, unpackPayload } from './signal.js';
+import { loadTurnConfig, saveTurnConfig, testTurnConfig, normalizeTurnUrls, turnIceServers } from './turnConfig.js';
 import { Rendezvous, makeRoomCode, normalizeRoomCode } from './rendezvous.js';
 
 const $ = (id) => document.getElementById(id);
@@ -50,10 +50,14 @@ export class Lobby {
   _consumeUrl() {
     if (this.session) return;
     const hash = window.location.hash || '';
-    const room = hash.match(/^#room=(.+)$/);
+    const room = hash.match(/^#room=([A-Za-z0-9-]+)(?:&turn=(.+))?$/);
     if (room) {
       const code = normalizeRoomCode(room[1]);
-      if (code) { this.open('roomJoin'); $('netRoomCodeIn').value = code; this._joinRoom(code); }
+      if (code) {
+        this.open('roomJoin');
+        $('netRoomCodeIn').value = code;
+        this._joinRoom(code, room[2] || null);
+      }
       return;
     }
     const invite = readJoinTokenFromUrl();
@@ -160,6 +164,18 @@ export class Lobby {
     return w.length ? w.join(' ') + ' — ' + text : text;
   }
 
+  /**
+   * Human-readable summary of what ICE actually obtained. Shown on both ends
+   * so a failing pairing can be diagnosed from the device itself: "relay"
+   * present means the TURN relay really was allocated.
+   */
+  _iceSummary(peer) {
+    const t = [...(peer?.candidateTypes || [])];
+    if (!t.length) return '';
+    const label = t.includes('relay') ? 'relais OK' : (t.includes('srflx') ? 'pas de relais' : 'local seulement');
+    return ` [réseau : ${t.join('+')} — ${label}]`;
+  }
+
   async _copy(text, okMessage) {
     if (!text) return;
     try {
@@ -188,9 +204,17 @@ export class Lobby {
 
   // ---------- Room flow (one URL, nothing to send back) ----------
 
-  _buildRoomUrl(code) {
+  /**
+   * Build the invitation URL. The relay (TURN) configuration is embedded in
+   * the link itself, so the guest holds it up front, it does not depend on the
+   * rendezvous relay, and the host can see with their own eyes that it is
+   * there. Anyone holding the link holds the credentials — same trade-off as
+   * the manual invite token.
+   */
+  async _buildRoomUrl(code) {
     const url = new URL(window.location.href);
-    url.hash = 'room=' + code;
+    const ice = turnIceServers();
+    url.hash = 'room=' + code + (ice.length ? '&turn=' + await packPayload(ice) : '');
     return url.toString();
   }
 
@@ -199,8 +223,13 @@ export class Lobby {
     this._busy = true;
     this._showStep('roomHost');
     const code = makeRoomCode();
+    const ice = turnIceServers();
     $('netRoomCode').textContent = code;
-    $('netRoomLink').value = this._buildRoomUrl(code);
+    $('netRoomLink').value = await this._buildRoomUrl(code);
+    $('netRoomTurn').textContent = ice.length
+      ? 'Relais TURN inclus dans le lien : ' + normalizeTurnUrls(loadTurnConfig().urls).join(', ')
+      : 'Aucun relais TURN configuré — la connexion échouera si un des deux réseaux bloque le direct.';
+    $('netRoomTurn').className = ice.length ? 'net-sub turn-ok' : 'net-sub turn-warn';
     this._status('Connexion aux relais de rendez-vous…');
 
     try {
@@ -210,7 +239,7 @@ export class Lobby {
 
       const peer = this._newPeer();
       const offer = await peer.createOffer();
-      this._status(this._withWarnings('En attente de votre adversaire…'));
+      this._status(this._withWarnings('En attente de votre adversaire…' + this._iceSummary(peer)));
 
       const answer = await this.rendezvous.hostExchange(
         { sdp: offer.sdp, type: offer.type }, offer.iceServers);
@@ -225,7 +254,11 @@ export class Lobby {
     }
   }
 
-  async _joinRoom(code) {
+  /**
+   * @param {string} code
+   * @param {string|null} turnFromUrl packed relay config carried by the link
+   */
+  async _joinRoom(code, turnFromUrl = null) {
     if (this._busy) return;
     this._busy = true;
     this._showStep('roomJoin');
@@ -233,6 +266,12 @@ export class Lobby {
     this._status('Connexion aux relais de rendez-vous…');
 
     try {
+      const urlIce = turnFromUrl ? (await unpackPayload(turnFromUrl)) || [] : [];
+      if (urlIce.length) {
+        $('netRoomJoinTurn').textContent = 'Relais TURN reçu dans le lien de l\'hôte.';
+        $('netRoomJoinTurn').className = 'net-sub turn-ok';
+      }
+
       this._teardownRendezvous();
       this.rendezvous = new Rendezvous({ code, onStatus: (t) => this._status(t) });
       await this.rendezvous.start();
@@ -240,9 +279,12 @@ export class Lobby {
 
       const offer = await this.rendezvous.awaitOffer();
       const peer = this._newPeer();
-      const answer = await peer.acceptOffer(offer.sdp, offer.ice || []);
+      // The link is the primary source; whatever arrives over the rendezvous
+      // is merged in as a backstop.
+      const ice = urlIce.length ? urlIce : (offer.ice || []);
+      const answer = await peer.acceptOffer(offer.sdp, ice);
       await this.rendezvous.sendAnswer(answer);
-      this._status(this._withWarnings('Réponse envoyée, connexion en cours…'));
+      this._status(this._withWarnings('Réponse envoyée, connexion en cours…' + this._iceSummary(peer)));
     } catch (err) {
       this._status('Erreur : ' + err.message, true);
       this._teardownPeer();

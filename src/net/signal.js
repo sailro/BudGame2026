@@ -147,3 +147,40 @@ export function readJoinTokenFromUrl() {
   const m = hash.match(/^#join=(.+)$/);
   return m ? m[1] : null;
 }
+
+// ---------- Generic payload packing ----------
+//
+// Used to carry the relay (TURN) configuration inside the invitation URL, so
+// the guest holds it before talking to anything else and the host can see it
+// is really there.
+
+export async function packPayload(obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  if (typeof CompressionStream === 'function') {
+    try {
+      const packed = await pipeThrough(bytes, new CompressionStream('deflate-raw'));
+      return PREFIX_DEFLATE + bytesToBase64Url(packed);
+    } catch {
+      /* fall through */
+    }
+  }
+  return PREFIX_RAW + bytesToBase64Url(bytes);
+}
+
+export async function unpackPayload(str) {
+  const raw = String(str || '').trim();
+  if (!raw) return null;
+  const prefix = raw.slice(0, 2);
+  const body = raw.slice(2);
+  let bytes;
+  if (prefix === PREFIX_DEFLATE) {
+    if (typeof DecompressionStream !== 'function') return null;
+    bytes = await pipeThrough(base64UrlToBytes(body), new DecompressionStream('deflate-raw'));
+  } else if (prefix === PREFIX_RAW) {
+    bytes = base64UrlToBytes(body);
+  } else {
+    return null;
+  }
+  try { return JSON.parse(new TextDecoder().decode(bytes)); }
+  catch { return null; }
+}
