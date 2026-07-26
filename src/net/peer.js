@@ -16,6 +16,20 @@ const STUN_SERVERS = [
 
 const PING_INTERVAL_MS = 1000;
 
+/** Union of two iceServers lists, de-duplicated. */
+function mergeIceServers(a = [], b = []) {
+  const seen = new Set();
+  const out = [];
+  for (const entry of [...a, ...b]) {
+    if (!entry || !entry.urls) continue;
+    const key = JSON.stringify(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
 export class NetPeer {
   constructor() {
     this.pc = null;
@@ -26,6 +40,7 @@ export class NetPeer {
     this.rtt = 0;
     this.candidateTypes = new Set();
     this.usingTurn = false;
+    this.inheritedTurn = false;
     this.warnings = [];
 
     // Callbacks, assigned by the owner.
@@ -41,15 +56,14 @@ export class NetPeer {
 
   _status(text) { if (this.onStatus) this.onStatus(text); }
 
-  _createConnection() {
-    const turn = turnIceServers();
-    this.usingTurn = turn.length > 0;
+  _createConnection(extraIce = []) {
+    this.usingTurn = extraIce.length > 0;
     // iceCandidatePoolSize is deliberately 0: pre-gathering would open TURN
     // allocations we may never use, and buys nothing with non-trickle ICE.
     let pc;
     try {
       pc = new RTCPeerConnection({
-        iceServers: [...STUN_SERVERS, ...turn],
+        iceServers: [...STUN_SERVERS, ...extraIce],
         iceCandidatePoolSize: 0,
       });
     } catch (err) {
@@ -131,7 +145,8 @@ export class NetPeer {
   /** Create the offer. Returns the shareable invite token. */
   async createInvite() {
     this.role = 'host';
-    const pc = this._createConnection();
+    const extraIce = turnIceServers();
+    const pc = this._createConnection(extraIce);
     this._bindChannel(pc.createDataChannel('ctrl', { ordered: true }));
     this._bindChannel(pc.createDataChannel('rt', { ordered: false, maxRetransmits: 0 }));
 
@@ -139,14 +154,15 @@ export class NetPeer {
     await pc.setLocalDescription(offer);
     this._status(this.usingTurn ? 'Recherche du chemin réseau (avec relais)…' : 'Recherche du chemin réseau…');
     await this._gather();
-    return encodeSignal(pc.localDescription);
+    // The relay config rides along so the guest can allocate through it too.
+    return encodeSignal(pc.localDescription, this.usingTurn ? extraIce : []);
   }
 
   /** Host: consume the answer token sent back by the guest. */
   async acceptAnswer(token) {
     const desc = await decodeSignal(token);
     if (desc.type !== 'answer') throw new Error('Ce code n\'est pas une réponse');
-    await this.pc.setRemoteDescription(desc);
+    await this.pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
     this._status('Établissement de la connexion…');
   }
 
@@ -158,13 +174,17 @@ export class NetPeer {
     if (desc.type !== 'offer') throw new Error('Ce code n\'est pas une invitation');
 
     this.role = 'guest';
-    const pc = this._createConnection();
+    // Use the host's relay (so no account is needed on this side) plus our own
+    // if one happens to be configured — either can carry the connection.
+    const extraIce = mergeIceServers(desc.iceServers, turnIceServers());
+    if (desc.iceServers.length) this.inheritedTurn = true;
+    const pc = this._createConnection(extraIce);
     pc.addEventListener('datachannel', (e) => {
       this._bindChannel(e.channel);
       this._maybeOpen();
     });
 
-    await pc.setRemoteDescription(desc);
+    await pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     this._status(this.usingTurn ? 'Recherche du chemin réseau (avec relais)…' : 'Recherche du chemin réseau…');

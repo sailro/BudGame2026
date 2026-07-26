@@ -36,9 +36,19 @@ async function pipeThrough(bytes, stream) {
   return new Uint8Array(await new Response(blobStream).arrayBuffer());
 }
 
-/** Serialize an RTCSessionDescription into a short shareable token. */
-export async function encodeSignal(desc) {
-  const bytes = new TextEncoder().encode(JSON.stringify({ t: desc.type, s: desc.sdp }));
+/**
+ * Serialize an RTCSessionDescription into a short shareable token.
+ *
+ * The relay (TURN) configuration travels with it: whoever creates the invite
+ * configures a relay once, and the other player inherits it just by opening the
+ * link. That matters because a relay candidate on one side only helps if the
+ * OTHER side can still reach the relay — if the guest is the one behind a
+ * firewall that drops UDP, it must be able to allocate its own relay too.
+ */
+export async function encodeSignal(desc, iceServers = []) {
+  const payload = { t: desc.type, s: desc.sdp };
+  if (iceServers.length) payload.i = iceServers;
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
   if (typeof CompressionStream === 'function') {
     try {
       const packed = await pipeThrough(bytes, new CompressionStream('deflate-raw'));
@@ -77,7 +87,7 @@ export async function decodeSignal(token) {
 
   const parsed = JSON.parse(new TextDecoder().decode(bytes));
   if (!parsed || !parsed.t || !parsed.s) throw new Error('Code invalide');
-  return { type: parsed.t, sdp: parsed.s };
+  return { type: parsed.t, sdp: parsed.s, iceServers: Array.isArray(parsed.i) ? parsed.i : [] };
 }
 
 /**

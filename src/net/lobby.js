@@ -173,7 +173,10 @@ export class Lobby {
       const peer = this._newPeer();
       this._inviteToken = await peer.createInvite();
       $('netOffer').value = buildJoinUrl(this._inviteToken);
-      this._status(this._withWarnings('Envoyez le lien, puis collez la réponse reçue.'),
+      const relayNote = peer.usingTurn
+        ? 'Relais inclus dans l\'invitation (votre adversaire n\'a rien à configurer). '
+        : '';
+      this._status(this._withWarnings(relayNote + 'Envoyez le lien, puis collez la réponse reçue.'),
                    peer.warnings.length > 0);
     } catch (err) {
       this._status('Erreur : ' + err.message, true);
@@ -206,7 +209,8 @@ export class Lobby {
       const answer = await peer.acceptInvite($('netOfferIn').value);
       $('netAnswerOut').value = answer;
       $('netAnswerWrap').hidden = false;
-      this._status(this._withWarnings('Renvoyez cette réponse à l\'hôte et patientez…'),
+      const relayNote = peer.inheritedTurn ? 'Relais fourni par l\'hôte. ' : '';
+      this._status(this._withWarnings(relayNote + 'Renvoyez cette réponse à l\'hôte et patientez…'),
                    peer.warnings.length > 0);
     } catch (err) {
       this._status('Erreur : ' + err.message, true);
