@@ -24,6 +24,9 @@ export const DEFAULT_RELAYS = [
   'wss://relay.primal.net',
   'wss://offchain.pub',
   'wss://relay.nostr.band',
+  'wss://nostr.mom',
+  'wss://relay.snort.social',
+  'wss://nostr-pub.wellorder.net',
 ];
 
 const toHex = (bytes) => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
@@ -132,7 +135,10 @@ export class NostrPool {
         if (this.connectedCount > 0) { clearInterval(timer); resolve(this.connectedCount); }
         else if (Date.now() - started > timeoutMs) {
           clearInterval(timer);
-          reject(new Error('Aucun relais de rendez-vous joignable'));
+          reject(new Error(
+            'Aucun relais de rendez-vous joignable. Un bloqueur de publicités ou '
+            + 'les boucliers Brave peuvent bloquer les WebSockets : désactivez-les '
+            + 'pour ce site, ou utilisez l\'appairage manuel.'));
         }
       }, 150);
     });

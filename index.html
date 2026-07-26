@@ -159,6 +159,13 @@
       .room-code { color: var(--gold); font-size: 16px; letter-spacing: 3px; }
       .turn-ok { color: #7ae582 !important; opacity: 1 !important; }
       .turn-warn { color: #ffb703 !important; opacity: 1 !important; }
+      #fatalError {
+        position: absolute; left: 8px; right: 8px; bottom: 34px; z-index: 40;
+        background: #4a0d0d; border: 2px solid #ff6b6b; color: #ffd7d7;
+        border-radius: 6px; padding: 10px 12px; font-size: 12px; line-height: 1.5;
+        word-break: break-word; pointer-events: auto;
+      }
+      #fatalError[hidden] { display: none; }
       .credits {
         position: absolute; bottom: 10px; left: 12px; font-size: 11px;
         opacity: 0.55; color: #cdd; z-index: 11;
@@ -329,7 +336,29 @@
           github.com/sailro/BudGame2026
         </a>
       </div>
+
+      <div id="fatalError" hidden></div>
     </div>
+
+    <script>
+      // There is no console on a phone: surface any uncaught failure on screen,
+      // otherwise a crash just looks like "the link does nothing".
+      (function () {
+        function show(what) {
+          var el = document.getElementById('fatalError');
+          if (!el) return;
+          el.hidden = false;
+          el.textContent = 'Erreur : ' + what;
+        }
+        window.addEventListener('error', function (e) {
+          show((e.message || 'inconnue') + (e.filename ? ' @ ' + e.filename.split('/').pop() : ''));
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e.reason;
+          show((r && (r.message || r)) || 'promesse rejetée');
+        });
+      })();
+    </script>
 
     <script type="module" src="/src/main.js"></script>
   </body>

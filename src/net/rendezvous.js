@@ -87,6 +87,10 @@ export class Rendezvous {
     this.pool = new NostrPool();
     this.onStatus = onStatus || null;
     this.ready = false;
+    this._handlers = new Set();
+    this._republishTimer = null;
+    this._closed = false;
+
     this.pool.onStatus = (n, total) => {
       if (!this.onStatus) return;
       // Once we are up and running the meaningful message is "waiting for your
@@ -97,8 +101,7 @@ export class Rendezvous {
       }
       this.onStatus(`Relais de rendez-vous : ${n}/${total} connecté(s)`);
     };
-    this._republishTimer = null;
-    this._closed = false;
+    this.pool.onEvent = (ev) => this._dispatch(ev);
   }
 
   async start() {
@@ -111,23 +114,31 @@ export class Rendezvous {
     return room.code;
   }
 
-  /** Receive the first payload matching `predicate`, ignoring our own posts. */
+  async _dispatch(ev) {
+    if (this._closed || ev.pubkey === this.pool.pubkey) return;
+    let payload;
+    try { payload = await open(this.room.key, ev.content); }
+    catch { return; }              // not ours, or wrong room code
+    for (const h of [...this._handlers]) h(payload);
+  }
+
+  /** Receive the first payload matching `predicate`. */
   _waitFor(predicate, timeoutMs) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error('Aucune réponse de l\'adversaire (délai dépassé)')), timeoutMs);
-      const prev = this.pool.onEvent;
-      this.pool.onEvent = async (ev) => {
-        if (prev) prev(ev);
-        if (this._closed || ev.pubkey === this.pool.pubkey) return;
-        let payload;
-        try { payload = await open(this.room.key, ev.content); }
-        catch { return; }           // not ours, or wrong room code
+      const handler = (payload) => {
         if (!predicate(payload)) return;
-        clearTimeout(timer);
-        this.pool.onEvent = prev;
+        cleanup();
         resolve(payload);
       };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Aucune réponse de l'adversaire (délai dépassé)"));
+      }, timeoutMs);
+      const cleanup = () => {
+        clearTimeout(timer);
+        this._handlers.delete(handler);
+      };
+      this._handlers.add(handler);
     });
   }
 
@@ -136,28 +147,46 @@ export class Rendezvous {
   }
 
   /**
-   * Host side: keep announcing the offer until an answer arrives. Ephemeral
-   * events are only delivered to current subscribers, so the offer has to be
-   * repeated for a guest that opens the link later.
+   * Host side: announce the offer and wait for an answer.
+   *
+   * Ephemeral events only reach current subscribers, so the offer has to be
+   * repeated for a guest that opens the link later. Timers are throttled hard
+   * in background tabs (down to once a minute), so rather than rely on that
+   * cadence the guest says hello on arrival and we answer immediately; the
+   * interval is only a backstop.
    */
-  async hostExchange(offer, iceServers, timeoutMs = 180000) {
+  async hostExchange(offer, iceServers, timeoutMs = 300000) {
     const payload = { role: 'offer', sdp: offer.sdp, type: offer.type, ice: iceServers };
-    await this._publish(payload);
-    this._republishTimer = setInterval(() => {
-      if (!this._closed) this._publish(payload).catch(() => {});
-    }, REPUBLISH_MS);
+    const announce = () => { if (!this._closed) this._publish(payload).catch(() => {}); };
 
+    const onHello = (p) => { if (p.role === 'hello') announce(); };
+    this._handlers.add(onHello);
+
+    announce();
+    this._republishTimer = setInterval(announce, REPUBLISH_MS);
     try {
       return await this._waitFor(p => p.role === 'answer', timeoutMs);
     } finally {
       clearInterval(this._republishTimer);
       this._republishTimer = null;
+      this._handlers.delete(onHello);
     }
   }
 
-  /** Guest side: wait for the offer. */
-  async awaitOffer(timeoutMs = 60000) {
-    return this._waitFor(p => p.role === 'offer', timeoutMs);
+  /**
+   * Guest side: wait for the offer, announcing ourselves so the host can send
+   * it straight away instead of waiting for its next scheduled announce.
+   */
+  async awaitOffer(timeoutMs = 90000) {
+    const waiter = this._waitFor(p => p.role === 'offer', timeoutMs);
+    const hello = () => { if (!this._closed) this._publish({ role: 'hello' }).catch(() => {}); };
+    hello();
+    const retry = setInterval(hello, 1500);
+    try {
+      return await waiter;
+    } finally {
+      clearInterval(retry);
+    }
   }
 
   /** Guest side: publish the answer a few times, in case a relay drops one. */
@@ -172,6 +201,7 @@ export class Rendezvous {
   close() {
     this._closed = true;
     clearInterval(this._republishTimer);
+    this._handlers.clear();
     this.pool.close();
   }
 }
