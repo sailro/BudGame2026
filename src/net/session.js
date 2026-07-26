@@ -22,14 +22,18 @@ export class NetSession {
    * @param {import('./peer.js').NetPeer} args.peer  already-connected peer
    * @param {object} args.game
    * @param {import('../input.js').InputSystem} args.input local keyboard
+   * @param {boolean} [args.spectator] this end only watches
    */
-  constructor({ peer, game, input }) {
+  constructor({ peer, game, input, spectator = false }) {
     this.peer = peer;
     this.game = game;
     this.localInput = input;
     this.role = peer.role;                                  // 'host' | 'guest'
+    this.spectator = spectator;
     this.localSide = this.role === 'host' ? 'p1' : 'p2';
     this.remoteSide = this.role === 'host' ? 'p2' : 'p1';
+    // Host only: extra read-only viewers that receive the same snapshots.
+    this.spectators = [];
 
     this.remoteInput = new RemoteInput();
     this.router = new NetInputRouter({
@@ -51,6 +55,32 @@ export class NetSession {
   }
 
   get rtt() { return this.peer.rtt; }
+
+  /** Host: attach a read-only viewer. It receives snapshots and control msgs. */
+  addSpectator(peer) {
+    if (this.role !== 'host') return;
+    this.spectators.push(peer);
+    // Bring them up to speed: current selection, and the match if one is live.
+    peer.sendCtrl({ t: 'select', side: 'p1', id: this.game.p1Choice });
+    peer.sendCtrl({ t: 'select', side: 'p2', id: this.game.p2Choice });
+    if (this.game.state !== 'menu') {
+      peer.sendCtrl({ t: 'start', p1: this.game.p1Choice, p2: this.game.p2Choice });
+    }
+    peer.onClose = () => this.removeSpectator(peer);
+  }
+
+  removeSpectator(peer) {
+    const i = this.spectators.indexOf(peer);
+    if (i >= 0) this.spectators.splice(i, 1);
+  }
+
+  get spectatorCount() { return this.spectators.length; }
+
+  /** Host: send a control message to the player and every spectator. */
+  broadcastCtrl(msg) {
+    this.peer.sendCtrl(msg);
+    for (const s of this.spectators) s.sendCtrl(msg);
+  }
 
   // ---------- Realtime ----------
 
@@ -78,9 +108,10 @@ export class NetSession {
 
   /** Host: called once per fixed simulation step, after the world was ticked. */
   afterHostTick() {
-    if (this.role !== 'host' || !this.peer.open) return;
+    if (this.role !== 'host') return;
     const g = this.game;
     if (g.state === 'menu' || g.players.length !== 2) return;
+    if (!this.peer.open && !this.spectators.length) return;
 
     const players = g.players.map((p) => ({
       x: p.root.position.x,
@@ -99,14 +130,17 @@ export class NetSession {
       } : null,
     }));
 
-    this.peer.sendRealtime(encodeSnapshot({
+    // Encode once, send to the player and to every spectator.
+    const packet = encodeSnapshot({
       seq: this._snapSeq++,
       gameState: g.state,
       timer: g.timer,
       events: this._pendingEvents,
       players,
       projectiles: g.projectiles.map(pr => ({ id: pr.netId, x: pr.position.x, y: pr.position.y })),
-    }));
+    });
+    this.peer.sendRealtime(packet);
+    for (const s of this.spectators) s.sendRealtime(packet);
     this._pendingEvents = 0;
   }
 
@@ -114,6 +148,7 @@ export class NetSession {
   guestFrame(dt) {
     if (this.role !== 'guest') return;
     this.snapshotAge += dt;
+    if (this.spectator) return;    // read-only: never send input
 
     for (const a of EDGE_ACTIONS) {
       if (this.localInput.isPressedAny(a)) this._counters[a] = (this._counters[a] + 1) & 0x0f;
@@ -143,6 +178,7 @@ export class NetSession {
     const g = this.game;
     switch (msg.t) {
       case 'select':
+        // A spectator never influences the selection, it only mirrors it.
         g.netOnRemoteSelect(msg.side, msg.id);
         break;
       case 'start':
@@ -162,14 +198,20 @@ export class NetSession {
     }
   }
 
-  sendSelect(side, id) { this.peer.sendCtrl({ t: 'select', side, id }); }
-  sendStart(p1, p2) { if (this.role === 'host') this.peer.sendCtrl({ t: 'start', p1, p2 }); }
-  sendMsg(text, duration) { if (this.role === 'host') this.peer.sendCtrl({ t: 'msg', text, duration }); }
-  sendMenu() { if (this.role === 'host') this.peer.sendCtrl({ t: 'menu' }); }
+  sendSelect(side, id) {
+    if (this.spectator) return;
+    if (this.role === 'host') this.broadcastCtrl({ t: 'select', side, id });
+    else this.peer.sendCtrl({ t: 'select', side, id });
+  }
+  sendStart(p1, p2) { if (this.role === 'host') this.broadcastCtrl({ t: 'start', p1, p2 }); }
+  sendMsg(text, duration) { if (this.role === 'host') this.broadcastCtrl({ t: 'msg', text, duration }); }
+  sendMenu() { if (this.role === 'host') this.broadcastCtrl({ t: 'menu' }); }
 
   dispose() {
     this.peer.onRealtime = null;
     this.peer.onCtrl = null;
+    for (const s of this.spectators) { try { s.close(); } catch { /* gone */ } }
+    this.spectators = [];
     this.latestSnapshot = null;
   }
 }

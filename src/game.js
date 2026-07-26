@@ -50,8 +50,8 @@ export class Game {
 
   setupMenu() {
     this.hud.buildPortraits(CHARACTER_IDS.map(id => CHARACTERS[id]), (side, id) => {
-      // Online: you may only pick your own fighter.
-      if (this.net && side !== this.net.localSide) return;
+      // Online: you may only pick your own fighter; spectators pick nothing.
+      if (this.net && (this.net.spectator || side !== this.net.localSide)) return;
       if (side === 'p1') { this.p1Choice = id; this.hud.setActivePortrait('p1', id); }
       else { this.p2Choice = id; this.hud.setActivePortrait('p2', id); }
       if (this.net) this.net.sendSelect(side, id);
@@ -63,7 +63,8 @@ export class Game {
   }
 
   startMatch() {
-    if (this.net && this.net.role === 'guest') return; // only the host starts the round
+    // Only the host starts a round; guests and spectators just follow.
+    if (this.net && this.net.role !== 'host') return;
     this._beginMatch(this.p1Choice, this.p2Choice);
     if (this.net) this.net.sendStart(this.p1Choice, this.p2Choice);
   }
@@ -317,7 +318,7 @@ export class Game {
   attachNet(session) {
     this.net = session;
     this.input = session.router;
-    this.hud.setOnlineRole(session.localSide);
+    this.hud.setOnlineRole(session.spectator ? 'spectator' : session.localSide);
   }
 
   /** Go back to plain couch play. */

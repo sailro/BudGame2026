@@ -23,22 +23,29 @@ export class HUD {
 
   /**
    * Switch the character-select screen between couch play and online play.
-   * @param {'p1'|'p2'|null} localSide  which fighter the local player owns
+   * @param {'p1'|'p2'|'spectator'|null} localSide  what this end may control
    */
   setOnlineRole(localSide) {
     this.onlineSide = localSide || null;
     const online = !!localSide;
+    const spectator = localSide === 'spectator';
     this.netBanner.hidden = !online;
     this.netBadge.hidden = !online;
     this.localControls.hidden = online;
-    this.onlineControls.hidden = !online;
+    this.onlineControls.hidden = !online || spectator;
     if (online) {
-      this.netBanner.textContent = localSide === 'p1'
-        ? 'EN LIGNE — vous êtes JOUEUR 1 (hôte)'
-        : 'EN LIGNE — vous êtes JOUEUR 2';
-      this.startBtn.textContent = localSide === 'p1' ? 'COMBATTRE !' : "EN ATTENTE DE L'HÔTE…";
+      this.netBanner.textContent = spectator
+        ? 'SPECTATEUR — vous regardez le combat'
+        : (localSide === 'p1'
+          ? 'EN LIGNE — vous êtes JOUEUR 1 (hôte)'
+          : 'EN LIGNE — vous êtes JOUEUR 2');
+      this.netBanner.classList.toggle('spectator', spectator);
+      this.startBtn.textContent = spectator
+        ? 'EN ATTENTE DU COMBAT…'
+        : (localSide === 'p1' ? 'COMBATTRE !' : "EN ATTENTE DE L'HÔTE…");
       this.startBtn.disabled = localSide !== 'p1';
     } else {
+      this.netBanner.classList.remove('spectator');
       this.startBtn.textContent = 'COMBATTRE !';
       this.startBtn.disabled = false;
     }

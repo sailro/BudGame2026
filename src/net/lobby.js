@@ -17,6 +17,9 @@ import { Rendezvous, makeRoomCode, normalizeRoomCode } from './rendezvous.js';
 
 const $ = (id) => document.getElementById(id);
 
+/** Each spectator costs the host another ~5 kB/s upstream. */
+const MAX_SPECTATORS = 8;
+
 export class Lobby {
   constructor({ game, input }) {
     this.game = game;
@@ -25,6 +28,9 @@ export class Lobby {
     this.session = null;
     this.rendezvous = null;
     this._busy = false;
+    this._joiners = new Map();          // host: cid -> { peer, seat }
+    this._pendingSpectators = [];       // connected before the player seat filled
+    this._joinSeat = 'player';
 
     this.panel = $('netPanel');
     this.steps = {
@@ -200,6 +206,11 @@ export class Lobby {
 
   _teardownRendezvous() {
     if (this.rendezvous) { this.rendezvous.close(); this.rendezvous = null; }
+    for (const e of this._joiners.values()) {
+      if (e.peer && e.peer !== this.peer) { try { e.peer.close(); } catch { /* gone */ } }
+    }
+    this._joiners.clear();
+    this._pendingSpectators = [];
   }
 
   // ---------- Room flow (one URL, nothing to send back) ----------
@@ -232,25 +243,96 @@ export class Lobby {
     $('netRoomTurn').className = ice.length ? 'net-sub turn-ok' : 'net-sub turn-warn';
     this._status('Connexion aux relais de rendez-vous…');
 
+    this._joiners = new Map();   // cid -> { peer, seat }
     try {
       this._teardownRendezvous();
       this.rendezvous = new Rendezvous({ code, onStatus: (t) => this._status(t) });
       await this.rendezvous.start();
-
-      const peer = this._newPeer();
-      const offer = await peer.createOffer();
-      this._status(this._withWarnings('En attente de votre adversaire…' + this._iceSummary(peer)));
-
-      const answer = await this.rendezvous.hostExchange(
-        { sdp: offer.sdp, type: offer.type }, offer.iceServers);
-      this._status('Adversaire trouvé, connexion en cours…');
-      await peer.applyAnswer(answer.sdp);
+      this.rendezvous.on((p) => this._onRoomMessage(p));
+      this._status('En attente de votre adversaire…');
     } catch (err) {
       this._status('Erreur : ' + err.message, true);
-      this._teardownPeer();
       this._teardownRendezvous();
     } finally {
       this._busy = false;
+    }
+  }
+
+  _onRoomMessage(p) {
+    if (p.role === 'hello') this._serveJoiner(p.cid);
+    else if (p.role === 'answer') this._applyJoinerAnswer(p.cid, p.sdp);
+  }
+
+  /**
+   * A new arrival. The first one takes the player seat; everyone after that
+   * gets a read-only view of the fight. Each joiner gets its own connection,
+   * so offers are addressed by joiner id and never stolen.
+   */
+  async _serveJoiner(cid) {
+    if (!cid || !this.rendezvous) return;
+    const existing = this._joiners.get(cid);
+    if (existing) {
+      // Duplicate hello (the guest retries until it hears back): re-send.
+      if (existing.offer) this.rendezvous.publish({ role: 'offer', cid, ...existing.offer });
+      return;
+    }
+    if (this._joiners.size >= 1 + MAX_SPECTATORS) {
+      this.rendezvous.publish({ role: 'full', cid });
+      return;
+    }
+
+    const seat = this._hasPlayer() ? 'spectator' : 'player';
+    const entry = { seat, offer: null, peer: null };
+    this._joiners.set(cid, entry);
+
+    try {
+      const peer = new NetPeer();
+      entry.peer = peer;
+      peer.onStatus = () => {};
+      peer.onOpen = () => this._onJoinerConnected(cid, entry);
+      peer.onClose = () => this._onJoinerLost(cid, entry);
+      const offer = await peer.createOffer();
+      entry.offer = { sdp: offer.sdp, type: offer.type, ice: offer.iceServers, seat };
+      this.rendezvous.publish({ role: 'offer', cid, ...entry.offer });
+      peer.armWatchdog(45000);
+    } catch (err) {
+      this._joiners.delete(cid);
+    }
+  }
+
+  _applyJoinerAnswer(cid, sdp) {
+    const entry = this._joiners.get(cid);
+    if (!entry || !entry.peer || entry.answered) return;
+    entry.answered = true;
+    entry.peer.applyAnswer(sdp).catch(() => {});
+  }
+
+  _hasPlayer() {
+    for (const e of this._joiners.values()) if (e.seat === 'player') return true;
+    return false;
+  }
+
+  _onJoinerConnected(cid, entry) {
+    if (entry.seat === 'player') {
+      this.peer = entry.peer;
+      // From here on, losing this peer means losing the match.
+      entry.peer.onClose = (reason) => this.disconnect(reason);
+      this._onConnected();
+    } else if (this.session) {
+      this.session.addSpectator(entry.peer);
+      this._updateBadge();
+    } else {
+      // Spectator arrived before the player did; hold it until the seat fills.
+      this._pendingSpectators.push(entry.peer);
+    }
+  }
+
+  _onJoinerLost(cid, entry) {
+    this._joiners.delete(cid);
+    if (entry.seat === 'spectator') {
+      if (this.session) this.session.removeSpectator(entry.peer);
+      const i = this._pendingSpectators.indexOf(entry.peer);
+      if (i >= 0) this._pendingSpectators.splice(i, 1);
     }
   }
 
@@ -277,14 +359,18 @@ export class Lobby {
       await this.rendezvous.start();
       this._status('Recherche de la partie…');
 
-      const offer = await this.rendezvous.awaitOffer();
+      const { cid, offer } = await this.rendezvous.join();
+      this._joinSeat = offer.seat === 'spectator' ? 'spectator' : 'player';
       const peer = this._newPeer();
       // The link is the primary source; whatever arrives over the rendezvous
       // is merged in as a backstop.
       const ice = urlIce.length ? urlIce : (offer.ice || []);
       const answer = await peer.acceptOffer(offer.sdp, ice);
-      await this.rendezvous.sendAnswer(answer);
-      this._status(this._withWarnings('Réponse envoyée, connexion en cours…' + this._iceSummary(peer)));
+      await this.rendezvous.sendAnswer(cid, answer);
+      peer.armWatchdog();
+      const seatNote = this._joinSeat === 'spectator'
+        ? 'Partie déjà complète : vous rejoignez en spectateur. ' : '';
+      this._status(this._withWarnings(seatNote + 'Connexion en cours…' + this._iceSummary(peer)));
     } catch (err) {
       this._status('Erreur : ' + err.message, true);
       this._teardownPeer();
@@ -367,20 +453,28 @@ export class Lobby {
   // ---------- Connection lifecycle ----------
 
   _onConnected() {
-    // The rendezvous relay has done its job; drop it before play starts.
-    this._teardownRendezvous();
-    this.session = new NetSession({ peer: this.peer, game: this.game, input: this.input });
+    // The room stays open so latecomers can watch, but we no longer need to
+    // hold the panel: the fight is starting.
+    this.session = new NetSession({
+      peer: this.peer, game: this.game, input: this.input,
+      spectator: this.peer.role === 'guest' && this._joinSeat === 'spectator',
+    });
     this.game.attachNet(this.session);
+    // Anyone who connected before the player seat filled can now be wired in.
+    for (const s of this._pendingSpectators) this.session.addSpectator(s);
+    this._pendingSpectators = [];
     // Make sure both ends agree on the initial character selection.
-    const side = this.session.localSide;
-    this.session.sendSelect(side, side === 'p1' ? this.game.p1Choice : this.game.p2Choice);
+    if (!this.session.spectator) {
+      const side = this.session.localSide;
+      this.session.sendSelect(side, side === 'p1' ? this.game.p1Choice : this.game.p2Choice);
+    }
     this.onlineBtn.textContent = 'QUITTER LA PARTIE EN LIGNE';
     this.panel.hidden = true;
     this._inviteToken = null;
     if (/^#(join=|room=)/.test(window.location.hash)) {
       history.replaceState(null, '', window.location.pathname + window.location.search);
     }
-    this.game.hud.showMessage('CONNECTÉ !', 1200);
+    this.game.hud.showMessage(this.session.spectator ? 'MODE SPECTATEUR' : 'CONNECTÉ !', 1500);
   }
 
   disconnect(reason) {
@@ -408,7 +502,10 @@ export class Lobby {
 
   _updateBadge() {
     if (!this.session) return;
-    const who = this.session.localSide === 'p1' ? 'J1 · hôte' : 'J2';
-    this.game.hud.setNetStatus(`EN LIGNE — ${who} — ${this.session.rtt} ms`);
+    const s = this.session;
+    const who = s.spectator ? 'spectateur' : (s.localSide === 'p1' ? 'J1 · hôte' : 'J2');
+    const viewers = s.role === 'host' && s.spectatorCount
+      ? ` — ${s.spectatorCount} spectateur${s.spectatorCount > 1 ? 's' : ''}` : '';
+    this.game.hud.setNetStatus(`EN LIGNE — ${who} — ${s.rtt} ms${viewers}`);
   }
 }

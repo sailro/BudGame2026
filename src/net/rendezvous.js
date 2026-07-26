@@ -18,6 +18,8 @@ const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE_LEN = 8;
 const REPUBLISH_MS = 2000;
 
+export const ROOM_FULL = 'Cette partie a déjà un adversaire. Demandez un nouveau lien.';
+
 export function makeRoomCode() {
   const bytes = crypto.getRandomValues(new Uint8Array(CODE_LEN));
   let out = '';
@@ -122,76 +124,55 @@ export class Rendezvous {
     for (const h of [...this._handlers]) h(payload);
   }
 
-  /** Receive the first payload matching `predicate`. */
-  _waitFor(predicate, timeoutMs) {
-    return new Promise((resolve, reject) => {
-      const handler = (payload) => {
-        if (!predicate(payload)) return;
-        cleanup();
-        resolve(payload);
-      };
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error("Aucune réponse de l'adversaire (délai dépassé)"));
-      }, timeoutMs);
-      const cleanup = () => {
-        clearTimeout(timer);
-        this._handlers.delete(handler);
-      };
-      this._handlers.add(handler);
-    });
+  /** Register a payload handler. Returns an unsubscribe function. */
+  on(cb) {
+    this._handlers.add(cb);
+    return () => this._handlers.delete(cb);
   }
 
   async _publish(payload) {
     this.pool.publish(this.room.tag, await seal(this.room.key, payload));
   }
 
+  /** Publish an encrypted payload to the room. */
+  publish(payload) { return this._publish(payload); }
+
   /**
-   * Host side: announce the offer and wait for an answer.
+   * Guest side: announce ourselves and wait for an offer addressed to us.
    *
-   * Ephemeral events only reach current subscribers, so the offer has to be
-   * repeated for a guest that opens the link later. Timers are throttled hard
-   * in background tabs (down to once a minute), so rather than rely on that
-   * cadence the guest says hello on arrival and we answer immediately; the
-   * interval is only a backstop.
+   * Every joiner gets its own id, so a room can serve several people at once
+   * and nobody steals an offer meant for someone else.
    */
-  async hostExchange(offer, iceServers, timeoutMs = 300000) {
-    const payload = { role: 'offer', sdp: offer.sdp, type: offer.type, ice: iceServers };
-    const announce = () => { if (!this._closed) this._publish(payload).catch(() => {}); };
+  async join(timeoutMs = 90000) {
+    const cid = Math.random().toString(36).slice(2, 10);
+    const waiter = new Promise((resolve, reject) => {
+      const off = this.on((p) => {
+        if (p.cid !== cid) return;
+        if (p.role === 'offer') { cleanup(); resolve(p); }
+        else if (p.role === 'full') { cleanup(); reject(new Error(ROOM_FULL)); }
+      });
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Aucune partie trouvée pour ce code. L'hôte a-t-il "
+          + 'toujours sa page ouverte ?'));
+      }, timeoutMs);
+      const cleanup = () => { clearTimeout(timer); off(); };
+    });
 
-    const onHello = (p) => { if (p.role === 'hello') announce(); };
-    this._handlers.add(onHello);
-
-    announce();
-    this._republishTimer = setInterval(announce, REPUBLISH_MS);
-    try {
-      return await this._waitFor(p => p.role === 'answer', timeoutMs);
-    } finally {
-      clearInterval(this._republishTimer);
-      this._republishTimer = null;
-      this._handlers.delete(onHello);
-    }
-  }
-
-  /**
-   * Guest side: wait for the offer, announcing ourselves so the host can send
-   * it straight away instead of waiting for its next scheduled announce.
-   */
-  async awaitOffer(timeoutMs = 90000) {
-    const waiter = this._waitFor(p => p.role === 'offer', timeoutMs);
-    const hello = () => { if (!this._closed) this._publish({ role: 'hello' }).catch(() => {}); };
+    const hello = () => { if (!this._closed) this._publish({ role: 'hello', cid }).catch(() => {}); };
     hello();
     const retry = setInterval(hello, 1500);
     try {
-      return await waiter;
+      const offer = await waiter;
+      return { cid, offer };
     } finally {
       clearInterval(retry);
     }
   }
 
-  /** Guest side: publish the answer a few times, in case a relay drops one. */
-  async sendAnswer(answer) {
-    const payload = { role: 'answer', sdp: answer.sdp, type: answer.type };
+  /** Guest side: publish our answer a few times, in case a relay drops one. */
+  async sendAnswer(cid, answer) {
+    const payload = { role: 'answer', cid, sdp: answer.sdp, type: answer.type };
     for (let i = 0; i < 3; i++) {
       await this._publish(payload);
       if (i < 2) await new Promise(r => setTimeout(r, 900));

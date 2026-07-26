@@ -121,6 +121,7 @@ export class NetPeer {
     if (!this.ctrl || this.ctrl.readyState !== 'open') return;
     if (!this.rt || this.rt.readyState !== 'open') return;
     this.open = true;
+    clearTimeout(this._watchdog);
     this._status('Connecté !');
     // Both ends ping so both can display a latency figure.
     this._pingTimer = setInterval(() => {
@@ -141,6 +142,7 @@ export class NetPeer {
     if (this._closed) return;
     this._closed = true;
     clearInterval(this._pingTimer);
+    clearTimeout(this._watchdog);
     this.open = false;
     this._status(reason);
     if (this.onClose) this.onClose(reason);
@@ -225,6 +227,19 @@ export class NetPeer {
     return encodeSignal({ type: answer.type, sdp: answer.sdp });
   }
 
+  /**
+   * Both descriptions are set, so the channels should open shortly. If they do
+   * not, fail loudly: silently waiting forever is the worst outcome, and it is
+   * exactly what a guest sees when someone else already took the seat.
+   */
+  armWatchdog(ms = 30000) {
+    clearTimeout(this._watchdog);
+    this._watchdog = setTimeout(() => {
+      if (this.open || this._closed) return;
+      this._fail(diagnoseIceFailure(this.candidateTypes, this.usingTurn));
+    }, ms);
+  }
+
   // ---------- Transport ----------
 
   sendCtrl(msg) {
@@ -241,6 +256,7 @@ export class NetPeer {
   close() {
     this._closed = true;
     clearInterval(this._pingTimer);
+    clearTimeout(this._watchdog);
     this.open = false;
     try { this.ctrl?.close(); } catch { /* already gone */ }
     try { this.rt?.close(); } catch { /* already gone */ }

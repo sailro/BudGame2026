@@ -36,6 +36,17 @@ Player 1 hosts: they own the simulation, pick their own fighter and start the
 round; player 2 streams their input and receives 60 Hz state snapshots. About
 5 kB/s each way.
 
+### Spectators
+
+The same link keeps working after the match has started. The first person to
+open it takes the player 2 seat; everyone after that joins as a **spectator**
+and watches read-only — their controls are ignored entirely, and they can join
+mid-fight, arriving straight into the current round with the right fighters,
+health bars and timer.
+
+Spectators are capped at 8, since each one costs the host roughly another
+5 kB/s upstream. The host's badge shows how many are watching.
+
 ### What touches a server, and what does not
 
 The **game itself is strictly peer-to-peer**: once connected, inputs and state
