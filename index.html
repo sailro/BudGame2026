@@ -152,6 +152,11 @@
         width: 100%; background: #0a0c12; color: #9fe; border: 2px solid #333;
         border-radius: 4px; padding: 8px; font-family: ui-monospace, Consolas, monospace; font-size: 11px;
       }
+      .net-card input[type="text"] {
+        width: 100%; background: #0a0c12; color: #9fe; border: 2px solid #333;
+        border-radius: 4px; padding: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 13px;
+      }
+      .room-code { color: var(--gold); font-size: 16px; letter-spacing: 3px; }
       .credits {
         position: absolute; bottom: 10px; left: 12px; font-size: 11px;
         opacity: 0.55; color: #cdd; z-index: 11;
@@ -217,8 +222,9 @@
         <div class="net-card">
           <h2>JOUER EN LIGNE</h2>
           <p class="net-sub">
-            100 % pair-à-pair : aucun serveur de jeu. Les deux navigateurs se parlent
-            directement, il suffit de s'échanger un code (Discord, SMS, mail…).
+            Pair-à-pair : le combat lui-même ne passe par aucun serveur. Un relais public
+            gratuit sert uniquement de point de rendez-vous pendant la poignée de main
+            (~700 octets, chiffrés), puis il est abandonné.
           </p>
 
           <div class="net-step" id="netHome">
@@ -247,7 +253,40 @@
                 sont essayées toutes les deux.
               </p>
             </details>
+            <details class="net-advanced">
+              <summary>Options avancées — appairage manuel (sans aucun tiers)</summary>
+              <p class="net-sub">
+                Si les relais de rendez-vous sont injoignables, vous pouvez échanger les
+                codes à la main : l'hôte envoie une invitation, le client renvoie une
+                réponse. Aucun tiers n'intervient, mais il y a un aller-retour.
+              </p>
+              <div class="net-row">
+                <button class="net-btn small" id="netManualHost">INVITATION MANUELLE</button>
+                <button class="net-btn small" id="netManualJoin">RÉPONDRE MANUELLEMENT</button>
+              </div>
+            </details>
             <button class="net-btn ghost" id="netCloseBtn">RETOUR</button>
+          </div>
+
+          <div class="net-step" id="netRoomHostStep" hidden>
+            <label>Partagez ce lien avec votre adversaire — c'est tout</label>
+            <textarea id="netRoomLink" readonly rows="2"></textarea>
+            <div class="net-row">
+              <button class="net-btn" id="netCopyRoomLink">COPIER LE LIEN</button>
+              <button class="net-btn small ghost" id="netCopyRoomCode">COPIER LE CODE</button>
+            </div>
+            <p class="net-sub">
+              Code du salon : <b id="netRoomCode" class="room-code"></b><br />
+              Laissez cette page ouverte : la partie démarre dès que votre adversaire arrive.
+            </p>
+            <button class="net-btn ghost" id="netCancelRoomHost">ANNULER</button>
+          </div>
+
+          <div class="net-step" id="netRoomJoinStep" hidden>
+            <label>Entrez le code du salon reçu</label>
+            <input id="netRoomCodeIn" type="text" placeholder="ABCD-2345" autocomplete="off" />
+            <button class="net-btn" id="netRoomJoinGo">REJOINDRE</button>
+            <button class="net-btn ghost" id="netCancelRoomJoin">ANNULER</button>
           </div>
 
           <div class="net-step" id="netHostStep" hidden>

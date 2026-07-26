@@ -85,12 +85,18 @@ export class NetPeer {
   /** Gather ICE, remembering which candidate types we managed to obtain. */
   async _gather() {
     // A TURN allocation needs a DNS lookup plus a round trip, so give it room.
-    this.candidateTypes = await waitForIceGathering(this.pc, {
+    const seen = await waitForIceGathering(this.pc, {
       quietMs: this.usingTurn ? 2500 : 1500,
       timeoutMs: this.usingTurn ? 25000 : 15000,
     });
-    if (!this.candidateTypes.has('srflx') && !this.candidateTypes.has('relay')) {
-      this._status('Attention : aucune adresse publique trouvée, l\'UDP sortant semble bloqué.');
+    // Events can be missed (listeners are attached after gathering starts, and
+    // a quiet timer can fire early), so the finished SDP is the authority.
+    const sdp = this.pc.localDescription ? this.pc.localDescription.sdp : '';
+    for (const m of sdp.matchAll(/ typ (\w+)/g)) seen.add(m[1]);
+    this.candidateTypes = seen;
+
+    if (!seen.has('srflx') && !seen.has('relay')) {
+      this.warnings.push("Aucune adresse publique trouvée : l'UDP sortant semble bloqué.");
     }
   }
 
@@ -142,8 +148,13 @@ export class NetPeer {
 
   // ---------- Host side ----------
 
-  /** Create the offer. Returns the shareable invite token. */
-  async createInvite() {
+  /**
+   * Build the offer and gather ICE.
+   * @returns {{sdp:string, type:string, iceServers:Array}} the relay config is
+   *   returned alongside so it can be handed to the guest, which needs to be
+   *   able to allocate through the same relay.
+   */
+  async createOffer() {
     this.role = 'host';
     const extraIce = turnIceServers();
     const pc = this._createConnection(extraIce);
@@ -154,42 +165,64 @@ export class NetPeer {
     await pc.setLocalDescription(offer);
     this._status(this.usingTurn ? 'Recherche du chemin réseau (avec relais)…' : 'Recherche du chemin réseau…');
     await this._gather();
-    // The relay config rides along so the guest can allocate through it too.
-    return encodeSignal(pc.localDescription, this.usingTurn ? extraIce : []);
+    return {
+      sdp: pc.localDescription.sdp,
+      type: pc.localDescription.type,
+      iceServers: this.usingTurn ? extraIce : [],
+    };
   }
 
-  /** Host: consume the answer token sent back by the guest. */
+  /** Host: apply the guest's answer. */
+  async applyAnswer(sdp) {
+    await this.pc.setRemoteDescription({ type: 'answer', sdp });
+    this._status('Établissement de la connexion…');
+  }
+
+  /** Create the offer. Returns the shareable invite token (manual mode). */
+  async createInvite() {
+    const offer = await this.createOffer();
+    return encodeSignal({ type: offer.type, sdp: offer.sdp }, offer.iceServers);
+  }
+
+  /** Host: consume the answer token sent back by the guest (manual mode). */
   async acceptAnswer(token) {
     const desc = await decodeSignal(token);
     if (desc.type !== 'answer') throw new Error('Ce code n\'est pas une réponse');
-    await this.pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
-    this._status('Établissement de la connexion…');
+    await this.applyAnswer(desc.sdp);
   }
 
   // ---------- Guest side ----------
 
-  /** Guest: consume the invite token and produce the answer token. */
-  async acceptInvite(token) {
-    const desc = await decodeSignal(token);
-    if (desc.type !== 'offer') throw new Error('Ce code n\'est pas une invitation');
-
+  /**
+   * Build the answer to a received offer.
+   * @param {string} sdp
+   * @param {Array} hostIceServers relay config inherited from the host, so the
+   *   guest can allocate through the same relay without owning an account.
+   */
+  async acceptOffer(sdp, hostIceServers = []) {
     this.role = 'guest';
-    // Use the host's relay (so no account is needed on this side) plus our own
-    // if one happens to be configured — either can carry the connection.
-    const extraIce = mergeIceServers(desc.iceServers, turnIceServers());
-    if (desc.iceServers.length) this.inheritedTurn = true;
+    const extraIce = mergeIceServers(hostIceServers, turnIceServers());
+    if (hostIceServers.length) this.inheritedTurn = true;
     const pc = this._createConnection(extraIce);
     pc.addEventListener('datachannel', (e) => {
       this._bindChannel(e.channel);
       this._maybeOpen();
     });
 
-    await pc.setRemoteDescription({ type: desc.type, sdp: desc.sdp });
+    await pc.setRemoteDescription({ type: 'offer', sdp });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     this._status(this.usingTurn ? 'Recherche du chemin réseau (avec relais)…' : 'Recherche du chemin réseau…');
     await this._gather();
-    return encodeSignal(pc.localDescription);
+    return { sdp: pc.localDescription.sdp, type: pc.localDescription.type };
+  }
+
+  /** Guest: consume the invite token and produce the answer token (manual mode). */
+  async acceptInvite(token) {
+    const desc = await decodeSignal(token);
+    if (desc.type !== 'offer') throw new Error('Ce code n\'est pas une invitation');
+    const answer = await this.acceptOffer(desc.sdp, desc.iceServers);
+    return encodeSignal({ type: answer.type, sdp: answer.sdp });
   }
 
   // ---------- Transport ----------

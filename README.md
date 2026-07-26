@@ -25,25 +25,48 @@ F1 toggles hurtbox/hitbox debug.
 Online, you drive a single fighter and **both** key maps work, so you can use
 whichever half of the keyboard you like.
 
-## Play online (serverless peer-to-peer)
+## Play online
 
-Click **JOUER EN LIGNE** in the menu. There is no game server, no matchmaking
-service and no signalling broker: the two browsers talk to each other directly
-over a WebRTC data channel, and the connection handshake is done by
-copy-pasting a code through whatever chat you already use.
-
-1. **Player 1** clicks *CRÉER UNE PARTIE* and sends the generated link (or code)
-   over Discord / SMS / mail.
-2. **Player 2** opens the link — the code is filled in automatically — clicks
-   *GÉNÉRER MA RÉPONSE*, and sends the reply code back.
-3. **Player 1** pastes the reply and clicks *CONNECTER*. Fight!
+Click **JOUER EN LIGNE**, then *CRÉER UNE PARTIE*. You get a link like
+`https://sailro.github.io/BudGame2026/#room=3FAK-FZ82` — send it to your
+opponent and that is it. They open it, the game connects, you fight. Nothing
+to send back.
 
 Player 1 hosts: they own the simulation, pick their own fighter and start the
 round; player 2 streams their input and receives 60 Hz state snapshots. About
 5 kB/s each way.
 
-> The invite code embeds your SDP, which contains your local and public IP
-> addresses. Share it only with the person you want to play against.
+### What touches a server, and what does not
+
+The **game itself is strictly peer-to-peer**: once connected, inputs and state
+travel directly between the two browsers and no third party can read them.
+
+WebRTC nonetheless requires a *two-way* handshake — the host must learn the
+guest's ICE candidates and DTLS certificate fingerprint, which the guest's
+browser generates randomly and which cannot be guessed or dictated (there is no
+certificate import API). That is a protocol requirement, not a design choice,
+so a strictly one-way invitation is impossible. Two things therefore rely on
+public infrastructure:
+
+| What | Used for | When |
+|---|---|---|
+| STUN (Google, Cloudflare) | discovering your own public address | every connection |
+| Nostr relays | brokering the ~700-byte handshake | pairing only |
+
+The handshake payload is **encrypted with AES-GCM** using a key derived from
+the room code, and published under a tag derived separately from that same
+code, so a relay only ever sees an opaque blob it cannot attribute. Events are
+ephemeral: relays forward them to current subscribers and never store them.
+Once the peer connection is up, the relays are dropped.
+
+### Manual pairing (zero third party)
+
+Under *Options avancées → appairage manuel* the original flow is still there:
+the host generates an invite code, the guest returns an answer code, and no
+relay is involved at all. It costs one round trip between the two players.
+
+> Both the invite code and the room payload embed your SDP, which contains your
+> local and public IP addresses. Share them only with your opponent.
 
 ### If the connection fails
 

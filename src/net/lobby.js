@@ -1,14 +1,19 @@
 // Lobby: drives the "play online" panel and owns the peer lifecycle.
 //
-// Flow (no server anywhere in the picture):
-//   host  : CREATE -> gets an invite token -> sends it over Discord/SMS/mail
-//   guest : pastes the invite -> gets an answer token -> sends it back
-//   host  : pastes the answer -> the data channels open -> fight!
+// Primary flow — one URL, nothing to send back:
+//   host  : CREATE -> gets a room code -> shares .../#room=XXXX-XXXX
+//   guest : opens the link -> both meet on public relays -> fight!
+// The relays only broker the (encrypted) WebRTC handshake; the game itself is
+// strictly peer-to-peer.
+//
+// Fallback flow — manual, zero third party, but with a round trip:
+//   host pastes an invite token, guest returns an answer token.
 
 import { NetPeer } from './peer.js';
 import { NetSession } from './session.js';
 import { buildJoinUrl, readJoinTokenFromUrl } from './signal.js';
 import { loadTurnConfig, saveTurnConfig, testTurnConfig, normalizeTurnUrls } from './turnConfig.js';
+import { Rendezvous, makeRoomCode, normalizeRoomCode } from './rendezvous.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,24 +23,39 @@ export class Lobby {
     this.input = input;
     this.peer = null;
     this.session = null;
+    this.rendezvous = null;
     this._busy = false;
 
     this.panel = $('netPanel');
-    this.steps = { home: $('netHome'), host: $('netHostStep'), join: $('netJoinStep') };
+    this.steps = {
+      home: $('netHome'),
+      host: $('netHostStep'),
+      join: $('netJoinStep'),
+      roomHost: $('netRoomHostStep'),
+      roomJoin: $('netRoomJoinStep'),
+    };
     this.statusEl = $('netStatus');
     this.onlineBtn = $('onlineBtn');
 
     this._bind();
     this._badgeTimer = setInterval(() => this._updateBadge(), 500);
 
-    this._consumeInviteFromUrl();
-    // Pasting a #join link into an already-open tab is a fragment navigation:
-    // the app never reloads, so we have to react to it explicitly.
-    window.addEventListener('hashchange', () => this._consumeInviteFromUrl());
+    this._consumeUrl();
+    // Pasting a link into an already-open tab is a fragment navigation: the app
+    // never reloads, so we have to react to it explicitly.
+    window.addEventListener('hashchange', () => this._consumeUrl());
   }
 
-  _consumeInviteFromUrl() {
+  /** React to both #room= (automatic) and #join= (manual) links. */
+  _consumeUrl() {
     if (this.session) return;
+    const hash = window.location.hash || '';
+    const room = hash.match(/^#room=(.+)$/);
+    if (room) {
+      const code = normalizeRoomCode(room[1]);
+      if (code) { this.open('roomJoin'); $('netRoomCodeIn').value = code; this._joinRoom(code); }
+      return;
+    }
     const invite = readJoinTokenFromUrl();
     if (!invite) return;
     this.open('join');
@@ -51,8 +71,19 @@ export class Lobby {
       else this.open('home');
     });
     $('netCloseBtn').addEventListener('click', () => this.close());
-    $('netHostBtn').addEventListener('click', () => this._startHost());
-    $('netJoinBtn').addEventListener('click', () => { this.open('join'); this._status(''); });
+    $('netHostBtn').addEventListener('click', () => this._hostRoom());
+    $('netJoinBtn').addEventListener('click', () => { this.open('roomJoin'); this._status(''); });
+    $('netManualHost').addEventListener('click', () => this._startHost());
+    $('netManualJoin').addEventListener('click', () => { this.open('join'); this._status(''); });
+    $('netCancelRoomHost').addEventListener('click', () => this._cancel());
+    $('netCancelRoomJoin').addEventListener('click', () => this._cancel());
+    $('netRoomJoinGo').addEventListener('click', () => {
+      const code = normalizeRoomCode($('netRoomCodeIn').value);
+      if (!code) return this._status('Code invalide (8 caractères attendus).', true);
+      this._joinRoom(code);
+    });
+    $('netCopyRoomLink').addEventListener('click', () => this._copy($('netRoomLink').value, 'Lien copié !'));
+    $('netCopyRoomCode').addEventListener('click', () => this._copy($('netRoomCode').textContent, 'Code copié !'));
     $('netBackHost').addEventListener('click', () => this._cancel());
     $('netBackJoin').addEventListener('click', () => this._cancel());
     $('netConnectBtn').addEventListener('click', () => this._hostAcceptAnswer());
@@ -141,6 +172,7 @@ export class Lobby {
 
   _cancel() {
     this._teardownPeer();
+    this._teardownRendezvous();
     this._inviteToken = null;
     this._showStep('home');
     this._status('');
@@ -148,6 +180,76 @@ export class Lobby {
 
   _teardownPeer() {
     if (this.peer) { this.peer.close(); this.peer = null; }
+  }
+
+  _teardownRendezvous() {
+    if (this.rendezvous) { this.rendezvous.close(); this.rendezvous = null; }
+  }
+
+  // ---------- Room flow (one URL, nothing to send back) ----------
+
+  _buildRoomUrl(code) {
+    const url = new URL(window.location.href);
+    url.hash = 'room=' + code;
+    return url.toString();
+  }
+
+  async _hostRoom() {
+    if (this._busy) return;
+    this._busy = true;
+    this._showStep('roomHost');
+    const code = makeRoomCode();
+    $('netRoomCode').textContent = code;
+    $('netRoomLink').value = this._buildRoomUrl(code);
+    this._status('Connexion aux relais de rendez-vous…');
+
+    try {
+      this._teardownRendezvous();
+      this.rendezvous = new Rendezvous({ code, onStatus: (t) => this._status(t) });
+      await this.rendezvous.start();
+
+      const peer = this._newPeer();
+      const offer = await peer.createOffer();
+      this._status(this._withWarnings('En attente de votre adversaire…'));
+
+      const answer = await this.rendezvous.hostExchange(
+        { sdp: offer.sdp, type: offer.type }, offer.iceServers);
+      this._status('Adversaire trouvé, connexion en cours…');
+      await peer.applyAnswer(answer.sdp);
+    } catch (err) {
+      this._status('Erreur : ' + err.message, true);
+      this._teardownPeer();
+      this._teardownRendezvous();
+    } finally {
+      this._busy = false;
+    }
+  }
+
+  async _joinRoom(code) {
+    if (this._busy) return;
+    this._busy = true;
+    this._showStep('roomJoin');
+    $('netRoomCodeIn').value = code;
+    this._status('Connexion aux relais de rendez-vous…');
+
+    try {
+      this._teardownRendezvous();
+      this.rendezvous = new Rendezvous({ code, onStatus: (t) => this._status(t) });
+      await this.rendezvous.start();
+      this._status('Recherche de la partie…');
+
+      const offer = await this.rendezvous.awaitOffer();
+      const peer = this._newPeer();
+      const answer = await peer.acceptOffer(offer.sdp, offer.ice || []);
+      await this.rendezvous.sendAnswer(answer);
+      this._status(this._withWarnings('Réponse envoyée, connexion en cours…'));
+    } catch (err) {
+      this._status('Erreur : ' + err.message, true);
+      this._teardownPeer();
+      this._teardownRendezvous();
+    } finally {
+      this._busy = false;
+    }
   }
 
   _newPeer() {
@@ -223,6 +325,8 @@ export class Lobby {
   // ---------- Connection lifecycle ----------
 
   _onConnected() {
+    // The rendezvous relay has done its job; drop it before play starts.
+    this._teardownRendezvous();
     this.session = new NetSession({ peer: this.peer, game: this.game, input: this.input });
     this.game.attachNet(this.session);
     // Make sure both ends agree on the initial character selection.
@@ -231,7 +335,7 @@ export class Lobby {
     this.onlineBtn.textContent = 'QUITTER LA PARTIE EN LIGNE';
     this.panel.hidden = true;
     this._inviteToken = null;
-    if (window.location.hash.startsWith('#join=')) {
+    if (/^#(join=|room=)/.test(window.location.hash)) {
       history.replaceState(null, '', window.location.pathname + window.location.search);
     }
     this.game.hud.showMessage('CONNECTÉ !', 1200);
@@ -242,6 +346,7 @@ export class Lobby {
     if (!wasPlaying && !this.peer) return;
     this.session = null;
     this._teardownPeer();
+    this._teardownRendezvous();
     this.onlineBtn.textContent = 'JOUER EN LIGNE';
 
     if (wasPlaying) {
